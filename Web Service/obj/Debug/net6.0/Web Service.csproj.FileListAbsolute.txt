@@ -1,0 +1,46 @@
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.exe
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.deps.json
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.runtimeconfig.json
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.pdb
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.GeneratedMSBuildEditorConfig.editorconfig
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.AssemblyInfoInputs.cache
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.AssemblyInfo.cs
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.csproj.CoreCompileInputs.cache
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\refint\Web Service.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.pdb
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.genruntimeconfig.cache
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\ref\Web Service.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Newtonsoft.Json.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\System.Data.SqlClient.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-arm64\native\sni.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-x64\native\sni.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-x86\native\sni.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\unix\lib\net6.0\System.Data.SqlClient.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win\lib\net6.0\System.Data.SqlClient.dll
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.csproj.AssemblyReference.cache
+C:\Agrometal\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.csproj.CopyComplete
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.exe
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.deps.json
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.runtimeconfig.json
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Web Service.pdb
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\Newtonsoft.Json.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\System.Data.SqlClient.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-arm64\native\sni.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-x64\native\sni.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win-x86\native\sni.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\unix\lib\net6.0\System.Data.SqlClient.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\bin\Debug\net6.0\runtimes\win\lib\net6.0\System.Data.SqlClient.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.csproj.AssemblyReference.cache
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.GeneratedMSBuildEditorConfig.editorconfig
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.AssemblyInfoInputs.cache
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.AssemblyInfo.cs
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.csproj.CoreCompileInputs.cache
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\refint\Web Service.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.pdb
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.genruntimeconfig.cache
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\ref\Web Service.dll
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Serv.2503F131.Up2Date
