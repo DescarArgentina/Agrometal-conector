@@ -32,11 +32,12 @@ namespace Web_Service
         public static async Task postSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
         {
             string url = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
-            //string url = "https://richiger-protheus-rest-val.totvs.ar/rest/TCEstructura/Incluir/";
             string username = "USERREST";
             string password = "restagr";
             //string username = "ADMIN"; // Usuario proporcionado
             //string password = "Totvs2024##"; // Contraseña proporcionada
+
+            var putFallBack = new Dictionary<string, List<List<Dictionary<string, string>>>>();
 
             using (HttpClient client = new HttpClient())
             {
@@ -74,8 +75,8 @@ namespace Web_Service
                     // Continuar con el resto del procesamiento...
                 
 
-                // Imprimir el JSON generado
-                Console.WriteLine("JSON generado:");
+                    // Imprimir el JSON generado
+                    Console.WriteLine("JSON generado:");
                     Console.WriteLine(jsonData);
                     //Console.WriteLine(codigo);
 
@@ -95,9 +96,23 @@ namespace Web_Service
                         responseData = await response.Content.ReadAsStringAsync();
 
                         // Verificar si la respuesta fue exitosa (puede lanzar excepción)
-                        response.EnsureSuccessStatusCode();
+                        //response.EnsureSuccessStatusCode();
 
-                        Console.WriteLine($"Respuesta para producto {parent.Key}: {responseData}, {statusCode}");
+                        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+                        {
+                            putFallBack[codigo] = parent.Value;
+                        }
+                        else if (response.IsSuccessStatusCode)
+                        {
+                            Console.WriteLine($"POST OK para {codigo}: {statusCode} - {responseData}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"POST ERROR para {codigo}: {(int)response.StatusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+                        }
+
+
+                            Console.WriteLine($"Respuesta para producto {parent.Key}: {responseData}, {statusCode}");
                     }
                     catch (Exception ex)
                     {
@@ -110,16 +125,28 @@ namespace Web_Service
                     }
                 }
             }
+
+            if (putFallBack.Count > 0)
+            {
+                Console.WriteLine($"Ejecutando PUT masivo para {putFallBack.Count} productos (fallback de 409).");
+                await putSG1(putFallBack);
+            }
         }
 
-        public async Task postSG1(string jsonString)
+        public async Task postSG1(string jsonString, Dictionary<string, List<List<Dictionary<string, string>>>>? putAcumulador = null)
         {
             string url = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
-            //string url = "https://richiger-protheus-rest-val.totvs.ar/rest/TCEstructura/Incluir/";
             string username = "USERREST";
             string password = "restagr";
             //string username = "ADMIN"; // Usuario proporcionado
             //string password = "Totvs2024##"; // Contraseña proporcionada
+
+            bool esAcumuladorPropio = false;
+            if (putAcumulador == null)
+            {
+                putAcumulador = new Dictionary<string, List<List<Dictionary<string, string>>>>();
+                esAcumuladorPropio = true;
+            }
 
             using (HttpClient client = new HttpClient())
             {
@@ -165,7 +192,23 @@ namespace Web_Service
                         responseData = await response.Content.ReadAsStringAsync();
 
                         // Verificar si la respuesta fue exitosa (puede lanzar excepción)
-                        response.EnsureSuccessStatusCode();
+                        //response.EnsureSuccessStatusCode();
+
+                        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+                        {
+                            Console.WriteLine($"POST devolvió 409 para {codigo}. Lo acumulamos para PUT masivo.");
+                            // 👉 Convertir este jsonString a entrada de diccionario y acumular
+                            var entrada = ConvertirJsonAEstructura(jsonString);
+                            putAcumulador[entrada.codigo] = entrada.estructura;
+                        }
+                        else if (response.IsSuccessStatusCode)
+                        {
+                            Console.WriteLine($"POST OK para {codigo}: {statusCode} - {responseData}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"POST ERROR para {codigo}: {(int)response.StatusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+                        }
 
                         Console.WriteLine($"Respuesta para producto {codigo}: {responseData}, {statusCode}");
                     }
@@ -189,60 +232,33 @@ namespace Web_Service
                     Console.WriteLine($"Error general: {ex.Message}");
                 }
             }
+
+            if (esAcumuladorPropio && putAcumulador.Count > 0)
+            {
+                Console.WriteLine($"Ejecutando PUT masivo (desde postSG1(string)) para {putAcumulador.Count} productos.");
+                await putSG1(putAcumulador);
+            }
         }
 
-        public async Task<List<string>> PostSG1(string apiUrl, List<string> jsonList, string username, string password)
+        private static (string codigo, List<List<Dictionary<string, string>>> estructura)
+        ConvertirJsonAEstructura(string jsonString)
         {
-            var results = new List<string>();
+            // Esperamos un JSON con campos: producto (string), estructura (array de arrays de objetos {campo, valor})
+            var root = JObject.Parse(jsonString);
 
-            try
-            {
-                // Configurar Basic Authentication
-                var authValue = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
-                _httpClient.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authValue);
+            string codigo = root["producto"]?.ToString()
+                            ?? throw new InvalidOperationException("JSON sin 'producto'.");
 
-                foreach (var item in jsonList)
-                {
-                    try
-                    {
-                        // Preparar el contenido JSON
-                        //var jsonPayload = JsonConvert.SerializeObject(item);
-                        var content = new StringContent(item, Encoding.UTF8, "application/json");
+            // estructura: JToken → List<List<Dictionary<string, string>>>
+            var estructuraToken = root["estructura"]
+                                  ?? throw new InvalidOperationException("JSON sin 'estructura'.");
 
-                        // Realizar la petición POST
-                        var response = await _httpClient.PostAsync(apiUrl, content);
+            var estructura = estructuraToken.ToObject<List<List<Dictionary<string, string>>>>()
+                            ?? throw new InvalidOperationException("No se pudo mapear 'estructura'.");
 
-                        // Verificar si la respuesta es exitosa
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var responseContent = await response.Content.ReadAsStringAsync();
-                            results.Add(responseContent);
-                        }
-                        else
-                        {
-                            var errorContent = await response.Content.ReadAsStringAsync();
-                            throw new HttpRequestException($"Error en la petición para item: {response.StatusCode} - {response.ReasonPhrase}. Contenido: {errorContent}");
-                        }
-                    }
-                    catch (HttpRequestException)
-                    {
-                        // Re-lanzar excepciones HTTP específicas
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new Exception($"Error al procesar item '{item}': {ex.Message}", ex);
-                    }
-                }
-
-                return results;
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Error al enviar datos a la API: {ex.Message}", ex);
-            }
+            return (codigo, estructura);
         }
+
 
         public static async Task putSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
         {
@@ -323,6 +339,53 @@ namespace Web_Service
                 }
             }
         }
+
+        //public static async Task putSG1(string jsonString)
+        //{
+        //    string urlPut = "http://119.8.73.193:8086/rest/TCEstructura/Modificar/";
+        //    string username = "USERREST";
+        //    string password = "restagr";
+
+        //    using (HttpClient client = new HttpClient())
+        //    {
+        //        var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
+        //        client.DefaultRequestHeaders.Authorization =
+        //            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+
+        //        string codigo = "(desconocido)";
+        //        int statusCode = 0;
+        //        string responseData = string.Empty;
+
+        //        try
+        //        {
+        //            var obj = JObject.Parse(jsonString);
+        //            codigo = obj["producto"]?.ToString() ?? "(sin producto)";
+
+        //            var content = new StringContent(jsonString, Encoding.UTF8, "application/json");
+        //            HttpResponseMessage response = await client.PutAsync(urlPut, content);
+
+        //            statusCode = (int)response.StatusCode;
+        //            responseData = await response.Content.ReadAsStringAsync();
+
+        //            if (response.IsSuccessStatusCode)
+        //            {
+        //                Console.WriteLine($"PUT OK para producto {codigo}: {responseData}, {statusCode}");
+        //            }
+        //            else
+        //            {
+        //                Console.WriteLine($"PUT ERROR para producto {codigo}: {response.StatusCode} - {response.ReasonPhrase}. Contenido: {responseData}");
+        //            }
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            Console.WriteLine($"Error en PUT para producto {codigo}: {ex.Message}");
+        //        }
+        //        finally
+        //        {
+        //            ActualizarBase(statusCode, responseData, codigo);
+        //        }
+        //    }
+        //}
 
         public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1()
         {

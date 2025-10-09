@@ -28,54 +28,70 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                           WHERE po.parentRef IS NULL
                         )
 
-            SELECT p.catalogueId AS codigo, 
+            SELECT p.catalogueId AS codigo, uud2.value, COALESCE(sq2.name, '') AS Nombre_WA,
             pr.revision AS revEstruct,
             CONCAT('Proceso: ', p.catalogueId, ' - ', fpn.first_process_name) AS descripcion,
             1 AS Cantidad,
             'PA' AS tipo,
             '01' AS deposito,
-            'UN' AS unMedida,
+            'UN' AS 'Unidad de Medida',
             fpn.first_process_name AS Process_name,
-            pr.subType
+            pr.subType,
+			TRY_CAST(RIGHT(p.catalogueId,5) AS INT) AS Ordenado
             FROM Operation O
             CROSS JOIN FirstProcessName fpn
             INNER JOIN OperationRevision OpR ON OpR.masterRef = o.id_Table
             INNER JOIN ProcessOccurrence po ON po.instancedRef = OpR.id_Table
-            INNER JOIN Form f ON f.name = CONCAT(o.catalogueId, '/', OpR.revision)
+            --INNER JOIN Form f ON f.name = CONCAT(o.catalogueId, '/', OpR.revision)
+            CROSS APPLY (
+              SELECT CASE
+                       WHEN RIGHT(o.catalogueId, 3) = '-OP'
+                            THEN LEFT(o.catalogueId, LEN(o.catalogueId) - 3)  -- quita ""-OP""
+                       WHEN CHARINDEX('-OP', o.catalogueId) > 0
+                            THEN REPLACE(o.catalogueId, '-OP', '')             -- más defensivo
+                       ELSE o.catalogueId
+                     END AS op_code_base
+            ) AS x
+			LEFT JOIN Form f ON f.name = CONCAT(x.op_code_base, '/', OpR.revision)
             INNER JOIN Form f2 ON f2.id_Table = f.id_Table + 3
             INNER JOIN UserValue_UserData uud ON uud.id_Father = f2.id_Table + 1 AND uud.title = 'allocated_time'
             INNER JOIN ProcessOccurrence po2 ON po2.id_Table = po.parentRef
+			LEFT JOIN UserValue_UserData uud2 ON uud2.id_Father = po2.id_Table + 2 AND uud2.title = 'SequenceNumber'
             INNER JOIN ProcessRevision pr ON pr.id_Table = po2.instancedRef
             INNER JOIN Process p ON p.id_Table = pr.masterRef
-            LEFT JOIN(SELECT p.catalogueId, sq1.productId FROM Process p
+            LEFT JOIN(SELECT p.catalogueId, sq1.productId, sq1.name FROM Process p
             INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN ProcessOccurrence po ON po.instancedRef = pr.id_Table
             INNER JOIN Occurrence o ON po.id_Table = o.parentRef
-            INNER JOIN (SELECT p.productId, o.parentRef FROM Product p
+            INNER JOIN (SELECT p.productId, o.parentRef, '' AS name  FROM Product p
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN Occurrence o ON o.instancedRef = pr.id_Table
             WHERE o.subType IS NULL
+			
 
             UNION ALL
 
-            SELECT wa.catalogueId, wao.parentRef FROM WorkArea wa
+            SELECT wa.catalogueId, wao.parentRef, war.name FROM WorkArea wa
             INNER JOIN WorkAreaRevision war ON war.masterRef = wa.id_Table
             INNER JOIN Occurrence wao ON wao.instancedRef = war.id_Table) sq1 ON sq1.parentRef = o.parentRef) sq2 ON sq2.catalogueId = p.catalogueId
 
+
             UNION ALL
 
-            SELECT productId, pr.revision, pr.name, COUNT(productId) AS Cantidad,
+            SELECT productId, 0 as value, '' as name, pr.revision, pr.name, COUNT(productId) AS Cantidad,
             'PA' AS tipo,
             '01' AS deposito,
             'UN' AS unMedida,
             fpn.first_process_name AS Process_name,
-            pr.subType
+            pr.subType,
+			0 as ordenado
             FROM Product p
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN Occurrence o ON o.instancedRef = pr.id_Table
             CROSS JOIN FirstProcessName fpn
-            WHERE o.subType = 'MEConsumed'
-            GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType";
+            WHERE o.subType = 'MEConsumed' OR pr.subType LIKE '%MatPrima%'
+            GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType
+			ORDER BY uud2.value DESC, Nombre_WA DESC, TRY_CAST(RIGHT(p.catalogueId,5) AS INT) DESC";
 
             //            string sqlQuery = @"WITH FirstProcessName AS (
             //                SELECT RIGHT(catalogueId,6) first_process_name
@@ -161,16 +177,17 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                         using (SqlConnection connection = new SqlConnection(connectionString))
                         {
                             connection.Open();
+                            
                             XmlNode root = xmlDoc.DocumentElement;
                             Dictionary<string, List<DataRow>> groupedDataRows = new Dictionary<string, List<DataRow>>();
 
                             if (ParseNode(root, groupedDataRows))
                             {
-                                if (ban)
-                                {
-                                    BorrarTabla(connection, groupedDataRows);
-                                    //ban = false;
-                                }
+                                //if (ban)
+                                //{
+                                //    BorrarTabla(connection, groupedDataRows);
+                                //    //ban = false;
+                                //}
 
                                 CreateTable(connection, groupedDataRows);
                                 InsertData(connection, groupedDataRows, archivo, contadorXmls);
@@ -218,60 +235,60 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                                 //estructuras = Tabla_SG1.jsonSG1();
                                 //await Tabla_SG1.postSG1(estructuras);
 
-                                //try
-                                //{
-                                //    // Opción 1: Mostrar estructura jerárquica
-                                //    Console.WriteLine(" === ESTRUCTURA JERÁRQUICA ===");
-                                //    converter.ShowHierarchicalStructure(sqlQuery);
+                                try
+                                {
+                                    // Opción 1: Mostrar estructura jerárquica
+                                    Console.WriteLine(" === ESTRUCTURA JERÁRQUICA ===");
+                                    converter.ShowHierarchicalStructure(sqlQuery);
 
-                                //    // Opción 2: Mostrar cadena jerárquica completa
-                                //    Console.WriteLine("\n=== CADENA JERÁRQUICA ===");
-                                //    converter.ShowHierarchicalChain(sqlQuery);
+                                    // Opción 2: Mostrar cadena jerárquica completa
+                                    Console.WriteLine("\n=== CADENA JERÁRQUICA ===");
+                                    converter.ShowHierarchicalChain(sqlQuery);
 
-                                //    // Opción 3: Procesar y mostrar todos los JSONs
-                                //    Console.WriteLine("\n=== JSONs INDIVIDUALES ===");
-                                //    converter.ProcessHierarchicalJsons(sqlQuery);
+                                    // Opción 3: Procesar y mostrar todos los JSONs
+                                    Console.WriteLine("\n=== JSONs INDIVIDUALES ===");
+                                    converter.ProcessHierarchicalJsons(sqlQuery);
 
-                                //    // Opción 4: Obtener lista de JSONs como strings
-                                //    Console.WriteLine("\n=== OBTENIENDO LISTA DE JSONs ===");
-                                //    var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
-                                //    string apiUrl = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
-                                //    string username = "USERREST";
-                                //    string password = "restagr";
+                                    // Opción 4: Obtener lista de JSONs como strings
+                                    Console.WriteLine("\n=== OBTENIENDO LISTA DE JSONs ===");
+                                    var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                                    string apiUrl = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
+                                    string username = "USERREST";
+                                    string password = "restagr";
 
-                                //    Tabla_SG1 tabla_SG1 = new Tabla_SG1();
-                                //    //Tablas_SG2_SH3.jsonSB1_BOP();
-                                //    //for (int i = jsonStrings.Count - 1; i == 0; i--)
-                                //    //{
-                                //    //    await tabla_SG1.postSG1(jsonStrings[i]);
-                                //    //}
-                                //    foreach (string s in jsonStrings)
-                                //    {
+                                    Tabla_SG1 tabla_SG1 = new Tabla_SG1();
+                                    //Tablas_SG2_SH3.jsonSB1_BOP();
+                                    //for (int i = jsonStrings.Count - 1; i == 0; i--)
+                                    //{
+                                    //    await tabla_SG1.postSG1(jsonStrings[i]);
+                                    //}
+                                    foreach (string s in jsonStrings)
+                                    {
 
-                                //        await tabla_SG1.postSG1(s);
-                                //    }
-                                //    //List<string> responses = await tabla_SG1.PostSG1(apiUrl, jsonStrings, username, password);
-                                //    //string firstResponse = responses.FirstOrDefault() ?? "No se recibió respuesta";
+                                        await tabla_SG1.postSG1(s);
+                                    }
+                                    //List<string> responses = await tabla_SG1.PostSG1(apiUrl, jsonStrings, username, password);
+                                    //string firstResponse = responses.FirstOrDefault() ?? "No se recibió respuesta";
 
 
-                                //    Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
+                                    Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
 
-                                //    // Mostrar todos los JSONs
-                                //    for (int i = 0; i < jsonStrings.Count; i++)
-                                //    {
-                                //        Console.WriteLine($"\nJSON #{i + 1}:");
-                                //        Console.WriteLine(jsonStrings[i]);
-                                //    }
+                                    // Mostrar todos los JSONs
+                                    for (int i = 0; i < jsonStrings.Count; i++)
+                                    {
+                                        Console.WriteLine($"\nJSON #{i + 1}:");
+                                        Console.WriteLine(jsonStrings[i]);
+                                    }
 
-                                //    // Opción 5: Guardar en archivos separados
-                                //    Console.WriteLine("\n=== GUARDANDO ARCHIVOS ===");
-                                //    //converter.SaveHierarchicalJsonFiles(sqlQuery, @"C:\Agrometal\jsons\");
+                                    // Opción 5: Guardar en archivos separados
+                                    Console.WriteLine("\n=== GUARDANDO ARCHIVOS ===");
+                                    //converter.SaveHierarchicalJsonFiles(sqlQuery, @"C:\Agrometal\jsons\");
 
-                                //}
-                                //catch (Exception ex)
-                                //{
-                                //    Console.WriteLine($"Error: {ex.Message}");
-                                //}
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Error: {ex.Message}");
+                                }
 
                                 // ------------------------------------ PROCESOS ENTERO ----------------------
                             }

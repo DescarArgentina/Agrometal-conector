@@ -28,6 +28,8 @@
         public string Codigo { get; set; }
         public double Cantidad { get; set; }
         public string Subtype { get; set; }  // <-- nuevo campo
+
+        public string Nombre_WA { get; set; }
     }
 
     public class SqlToJsonConverter
@@ -56,7 +58,8 @@
                             ProcessName = rdr["Process_name"].ToString(),
                             Codigo = rdr["codigo"].ToString(),
                             Cantidad = Convert.ToDouble(rdr["Cantidad"]),
-                            Subtype = rdr["subType"].ToString()
+                            Subtype = rdr["subType"].ToString(),
+                            Nombre_WA = rdr["Nombre_WA"].ToString()
                         });
                     }
                 }
@@ -73,20 +76,44 @@
             var parentOrder = new List<string>(); // para preservar el orden
             string lastMEProcessRevision = null;
 
-            foreach (var rec in records)
+            for (int i = 0; i < records.Count; i++)
             {
+                var rec = records[i];
+                bool isTerceros = !string.IsNullOrWhiteSpace(rec.Nombre_WA) &&
+                                  rec.Nombre_WA.IndexOf("terceros", StringComparison.OrdinalIgnoreCase) >= 0;
+
                 string padre;
 
-                if (rec.Subtype == "MEProcessRevision")
+                if (isTerceros && i + 1 < records.Count)
                 {
-                    // Su padre es el último MEProcessRevision anterior (o root si no hay)
-                    padre = lastMEProcessRevision ?? rootParent;
-                    lastMEProcessRevision = rec.Codigo; // actualizar tracker
+                    // Hacer hermano del de abajo: usar el MISMO padre que tendrá el próximo registro
+                    var nextRec = records[i + 1];
+
+                    // El padre del próximo se calcula con el lastMEProcessRevision ACTUAL (aún sin procesar nextRec)
+                    string padreNext = (nextRec.Subtype == "MEProcessRevision")
+                        ? (lastMEProcessRevision ?? rootParent)
+                        : (lastMEProcessRevision ?? rootParent);
+
+                    padre = padreNext;
+
+                    // Nota: NO actualizamos lastMEProcessRevision aquí aunque rec sea MEProcessRevision.
+                    // La idea es que este registro no afecte la cadena; solo se cuelga como hermano del siguiente.
                 }
                 else
                 {
-                    // No es MEProcessRevision => cuelga del último MEProcessRevision (o root si es el primero)
-                    padre = lastMEProcessRevision ?? rootParent;
+                    if (rec.Subtype == "MEProcessRevision")
+                    {
+                        // Su padre es el último MEProcessRevision anterior (o root si no hay)
+                        padre = lastMEProcessRevision ?? rootParent;
+
+                        // Ahora sí, al ser un MEProcessRevision real, actualiza el tracker
+                        lastMEProcessRevision = rec.Codigo;
+                    }
+                    else
+                    {
+                        // No es MEProcessRevision => cuelga del último MEProcessRevision (o root si es el primero)
+                        padre = lastMEProcessRevision ?? rootParent;
+                    }
                 }
 
                 if (!map.TryGetValue(padre, out var product))
@@ -95,26 +122,26 @@
                     {
                         producto = padre,
                         qtdBase = "1",
-                        estructura = new List<List<Campo>>() // importante inicializar
+                        estructura = new List<List<Campo>>()
                     };
                     map[padre] = product;
                     parentOrder.Add(padre);
                 }
 
-                // Agregar este hijo como un NUEVO arreglo dentro de 'estructura'
                 product.estructura.Add(new List<Campo>
-        {
-            new Campo { campo = "codigo",   valor = rec.Codigo },
-            new Campo { campo = "cantidad", valor = rec.Cantidad.ToString(CultureInfo.InvariantCulture) }
-        });
+    {
+        new Campo { campo = "codigo",   valor = rec.Codigo },
+        new Campo { campo = "cantidad", valor = rec.Cantidad.ToString(CultureInfo.InvariantCulture) }
+    });
             }
 
-            // Devolver respetando orden de aparición de los padres
+            // Devolver respetando el orden de aparición de los padres
             var products = new List<ProductStructure>(parentOrder.Count);
             foreach (var padre in parentOrder)
                 products.Add(map[padre]);
 
             return products;
+
         }
 
 

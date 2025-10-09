@@ -59,25 +59,6 @@ namespace Web_Service
                         Console.WriteLine("Ya existe (409). Intentando PUT /Modificar...");
                         await putSG2_SH3(jsonData);     // llamada a la función PUT
                         return;                         // salimos después del PUT
-                        //WsError err = null;
-                        //try { err = JsonConvert.DeserializeObject<WsError>(responseData); } catch { }
-
-                        //switch (err?.errorCode)
-                        //{
-                        //    case 3:
-                        //        Console.WriteLine("Ya existe: hago PUT /Modificar/...");
-                        //        await putSG2_SH3(jsonData);
-                        //        return;
-                        //    case 2:
-                        //        Console.WriteLine("El producto no existe en el ERP. Primero crear/activar SB1 con TCProductos/Incluir/.");
-                        //        return;
-                        //    case 8:
-                        //        Console.WriteLine("No existe para modificar: revisar 'código' y 'producto' enviados antes de intentar el PUT");
-                        //        return;
-                        //    default:
-                        //        Console.WriteLine("409 no reconocido por código: revisar el payload y matriz de campos");
-                        //        return;
-                        //}
                     }
 
                     // Si no fue 409, ahora sí validamos éxito del POST
@@ -296,7 +277,7 @@ CROSS APPLY (
 JOIN Form AS f_op
   ON f_op.name = CONCAT(x.op_code_base, '/', opr.revision)
 
-/* ----- Tiempo (según Forms) [mantenemos tu lógica actual de offsets] ----- */
+/* ----- Tiempo (según Forms) ----- */
 JOIN Form AS f_time
   ON f_time.id_Table = f_op.id_Table + 3
 JOIN UserValue_UserData AS uud
@@ -666,7 +647,7 @@ WHERE p.catalogueId LIKE 'PR%'
                           WHERE po.parentRef IS NULL
                         )
 
-            SELECT p.catalogueId AS codigo, 
+            SELECT p.catalogueId AS codigo, uud2.value,
             pr.revision AS revEstruct,
             CONCAT('Proceso: ', p.catalogueId, ' - ', fpn.first_process_name) AS descripcion,
             1 AS Cantidad,
@@ -693,6 +674,7 @@ WHERE p.catalogueId LIKE 'PR%'
             INNER JOIN Form f2 ON f2.id_Table = f.id_Table + 3
             INNER JOIN UserValue_UserData uud ON uud.id_Father = f2.id_Table + 1 AND uud.title = 'allocated_time'
             INNER JOIN ProcessOccurrence po2 ON po2.id_Table = po.parentRef
+			LEFT JOIN UserValue_UserData uud2 ON uud2.id_Father = po2.id_Table + 2 AND uud2.title = 'SequenceNumber'
             INNER JOIN ProcessRevision pr ON pr.id_Table = po2.instancedRef
             INNER JOIN Process p ON p.id_Table = pr.masterRef
             LEFT JOIN(SELECT p.catalogueId, sq1.productId FROM Process p
@@ -703,6 +685,7 @@ WHERE p.catalogueId LIKE 'PR%'
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN Occurrence o ON o.instancedRef = pr.id_Table
             WHERE o.subType IS NULL
+			
 
             UNION ALL
 
@@ -710,9 +693,10 @@ WHERE p.catalogueId LIKE 'PR%'
             INNER JOIN WorkAreaRevision war ON war.masterRef = wa.id_Table
             INNER JOIN Occurrence wao ON wao.instancedRef = war.id_Table) sq1 ON sq1.parentRef = o.parentRef) sq2 ON sq2.catalogueId = p.catalogueId
 
+
             UNION ALL
 
-            SELECT productId, pr.revision, pr.name, COUNT(productId) AS Cantidad,
+            SELECT productId, 0 as value, pr.revision, pr.name, COUNT(productId) AS Cantidad,
             'PA' AS tipo,
             '01' AS deposito,
             'UN' AS unMedida,
@@ -722,8 +706,9 @@ WHERE p.catalogueId LIKE 'PR%'
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN Occurrence o ON o.instancedRef = pr.id_Table
             CROSS JOIN FirstProcessName fpn
-            WHERE o.subType = 'MEConsumed'
-            GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType";
+            WHERE o.subType = 'MEConsumed' OR pr.subType LIKE '%MatPrima%'
+            GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType
+			ORDER BY uud2.value DESC, p.catalogueId DESC";
 
 
             List<string> jsonProductos = new List<string>();
