@@ -125,7 +125,7 @@ SELECT
 RankedData2 AS (
 SELECT 
 		Process.catalogueId AS instancedProcess,
-        Process.name AS processName,
+        Process.name AS Process_codigo,
         WorkArea.catalogueId AS instancedWorkArea,
         WorkArea.name,
         PO.idXml,
@@ -157,7 +157,7 @@ SELECT
 	ELSE COALESCE(rd2.instancedProcess, MEProcess.catalogueId) END
 	AS codigo,
 	--MEOP.catalogueId AS codigo,
-    CONCAT(rd2.processName, ' (',MEProcess.Abuelo,')')  AS Descripcion,
+    CONCAT(rd2.Process_codigo, ' (',MEProcess.Abuelo,')')  AS Descripcion,
     'PA' as tipo,
     '01' as deposito,
     'UN' AS 'Unidad de Medida',

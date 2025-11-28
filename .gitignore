@@ -1,0 +1,11 @@
+# Carpetas de Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build outputs
+bin/
+obj/
+
+# Otros temporales
+*.log

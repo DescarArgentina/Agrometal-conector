@@ -44,3 +44,4 @@ E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Servi
 E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.genruntimeconfig.cache
 E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\ref\Web Service.dll
 E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Serv.2503F131.Up2Date
+E:\Proyectos\Agrometal\Programación\Web Service Agrometal\Web Service\Web Service\obj\Debug\net6.0\Web Service.sourcelink.json

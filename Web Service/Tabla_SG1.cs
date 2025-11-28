@@ -399,7 +399,7 @@ namespace Web_Service
                     ProductRevision.name,
                     Occurrence.idXml,
                     CASE 
-                        WHEN LEFT(Product.productId, 1) = 'M' THEN RIGHT(Product.productId, LEN(Product.productId) - 1)
+                        WHEN LEFT(Product.productId, 1) = 'M' THEN RIGHT(Product.productId, LEN(Product.productId) - 2)
                         WHEN LEFT(Product.productId, 1) = 'E' THEN RIGHT(Product.productId, LEN(Product.productId)-1)
                         WHEN RIGHT(Product.productId, 3)= '-FV' THEN LEFT(Product.productId, LEN(Product.productId)-3)
                         ELSE Product.productId 
@@ -435,7 +435,7 @@ namespace Web_Service
                     pr.name,
                     o.idXml,
                     CASE 
-                        WHEN LEFT(pd.productId, 1) = 'M' THEN RIGHT(pd.productId, LEN(pd.productId) - 1)
+                        WHEN LEFT(pd.productId, 1) = 'M' THEN RIGHT(pd.productId, LEN(pd.productId) - 2)
                         WHEN LEFT(pd.productId, 1) = 'E' THEN RIGHT(pd.productId, LEN(pd.productId)-1)
                         WHEN RIGHT(pd.productId, 3)= '-FV' THEN LEFT(pd.productId, LEN(pd.productId)-3)
                         ELSE pd.productId 
@@ -466,88 +466,7 @@ namespace Web_Service
                 c.parentRef
             ORDER BY p.idXml, p.id_table";
 
-            //            string query = @"WITH CTE_Hierarchy AS(
-            //                SELECT DISTINCT
-
-            //                    Occurrence.id_table,
-            //                    ProductRevision.name,
-            //                    CASE WHEN LEFT(Product.productId, 2) = 'M-' THEN
-            //                --CASE WHEN Occurrence.parentRef IS NULL THEN LEFT(RIGHT(Product.productId, LEN(Product.productId) - 2), LEN(RIGHT(Product.productId, LEN(Product.productId) - 2)) - 3)
-            //                --ELSE
-
-            //                RIGHT(Product.productId, LEN(Product.productId) - 2)
-
-            //                WHEN LEFT(Product.productId, 1) = 'M' THEN
-
-            //                RIGHT(Product.productId, LEN(Product.productId) - 1)
-            //                --END
-
-            //                WHEN LEFT(Product.productId, 1) = 'E' THEN RIGHT(Product.productId, LEN(Product.productId) - 1)
-
-
-            //                 ELSE Product.productId END AS codigo,
-            //                    SUM(TRY_CAST(CASE
-
-            //                        WHEN UserValue_UserData.value = '' THEN '1'
-
-            //                        ELSE UserValue_UserData.value
-
-            //                    END AS FLOAT)) AS Cantidad,
-            //                    CAST(Occurrence.parentRef AS INT) AS parentRef,
-            //                    uud2.value AS Variante
-
-            //                FROM
-
-            //                    Occurrence
-
-            //                LEFT JOIN ProductRevision ON Occurrence.instancedRef = ProductRevision.id_Table
-
-            //                LEFT JOIN Product ON ProductRevision.masterRef = Product.id_Table
-
-            //                LEFT JOIN ProductInstance ON Occurrence.instanceRefs = ProductInstance.id_Table
-
-            //                LEFT JOIN Unit ON CAST(SUBSTRING(ProductInstance.unitRef, 3, LEN(ProductInstance.unitRef) - 2) AS INT) = Unit.id_Table
-
-            //                LEFT JOIN UserValue_UserData ON Occurrence.id_Table + 2 = UserValue_UserData.id_Father AND UserValue_UserData.title = 'Quantity'
-
-            //                LEFT JOIN UserValue_UserData uud2 ON Occurrence.id_Table - 1 = uud2.id_Father AND uud2.title = 'bl_formula'
-
-            //                GROUP BY ProductRevision.name, Product.productId, Occurrence.parentRef, Occurrence.id_table, ProductRevision.id_Table, UserValue_UserData.value,
-            //                uud2.value
-            //            )
-            //SELECT DISTINCT
-            //    --Parent.id_table AS ParentId,
-            //    --CASE WHEN Parent.name = 'TX-MEGA GEN3 12-70 150% MBOM' THEN 'TX-MEGA GEN3 12-70 FS MECANICA' ELSE Parent.name END AS ParentName,
-            //	Parent.name AS ParentName,
-            //	--Parent.codigo AS ParentCodigo,
-            //    --CASE WHEN Parent.codigo = 'MEGA1270150' THEN '1000004' ELSE Parent.codigo END AS ParentCodigo,
-            //	Parent.codigo AS ParentCodigo,
-            //    Child.name AS ChildName,
-            //    Child.codigo AS ChildCodigo,
-            //    SUM(Child.Cantidad) AS CantidadHijo,
-            //    Child.Variante
-            //    --SUM(Parent.Cantidad) AS CantidadPadre
-            //FROM
-            //    CTE_Hierarchy Parent
-            //INNER JOIN
-            //    CTE_Hierarchy Child ON Parent.id_table = Child.parentRef
-            //WHERE 
-            //Parent.codigo <> Child.codigo
-            //--WHERE 
-            //--LEN(Child.codigo) < 15 AND Parent.codigo IN('021013', '068243')
-            //--Child.Variante <> ''
-            //--AND Child.codigo = '074070'
-            //--Parent.codigo = 'MEGA1270150'
-            //--WHERE Parent.codigo = '024538'
-            //--OR Parent.codigo = '084371'
-            //GROUP BY
-            //    Parent.id_table,
-            //    Parent.name,
-            //    Parent.codigo,
-            //    Child.name,
-            //    Child.codigo,
-            //	Child.Variante
-            //--ORDER BY ParentId";
+           
 
             Dictionary<string, List<List<Dictionary<string, string>>>> estructuras = new Dictionary<string, List<List<Dictionary<string, string>>>>();
             try
@@ -566,17 +485,13 @@ namespace Web_Service
                             // Primero, agrupamos todos los datos por ParentCodigo para procesarlos juntos
                             while (reader.Read())
                             {
-                                // Check for null or empty ParentCodigo
-                                //string parentName = reader["ParentName"]?.ToString() ?? string.Empty;
-                                //string parentCodigo = reader["ParentCodigo"]?.ToString();
-                                //string childName = reader["ChildName"]?.ToString() ?? string.Empty;
-                                //string childCodigo = reader["ChildCodigo"]?.ToString() ?? string.Empty;
-                                //string cantidadHijo = reader["CantidadHijo"]?.ToString().Replace(',', '.') ?? string.Empty;
+                                
 
                                 string parentName = reader["Nombre_Padre"]?.ToString() ?? string.Empty;
                                 string? parentCodigo = reader["Codigo_Padre"]?.ToString();
                                 string childName = reader["Nombre_Hijo"]?.ToString() ?? string.Empty;
                                 string childCodigo = reader["Codigo_Hijo"]?.ToString() ?? string.Empty;
+                                Console.WriteLine("Este es el codigo que va al json: " + childCodigo);
                                 string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
 
                                 if (string.IsNullOrEmpty(parentCodigo))
@@ -668,10 +583,10 @@ namespace Web_Service
                                 foreach (var child in children)
                                 {
                                     var childStructure = new List<Dictionary<string, string>>
-                            {
-                                new Dictionary<string, string> { { "campo", "codigo" }, { "valor", child.ChildCodigo } },
-                                new Dictionary<string, string> { { "campo", "cantidad" }, { "valor", child.CantidadHijo } }
-                            };
+                                    {
+                                        new Dictionary<string, string> { { "campo", "codigo" }, { "valor", child.ChildCodigo } },
+                                        new Dictionary<string, string> { { "campo", "cantidad" }, { "valor", child.CantidadHijo } }
+                                    };
 
                                     // If variant is empty, no additional fields needed
                                     if (string.IsNullOrEmpty(child.Variante))

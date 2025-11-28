@@ -14,7 +14,7 @@ namespace Web_Service
         {
             var listaIgnorados = new List<string> { "ApplicationRef", "AssociatedDataSet", "AttributeContext", "DataSet",
                                             "ExternalFile", "Folder",
-                                            "ProductRevisionView", "RevisionRule", "Site", "Transform", "View" };
+                                             "RevisionRule", "Site", "Transform", "View" };
 
             try
             {

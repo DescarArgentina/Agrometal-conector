@@ -78,7 +78,7 @@ namespace Web_Service
                     Console.WriteLine($"Código de estado: {statusCode}");
                     Console.WriteLine("Respuesta del servicio:");
                     Console.WriteLine(responseData);
-                    //poblarBase(codigo, descripcion,"PA","01","UN", revision, statusCode,responseData);
+                    poblarBase(codigo, descripcion,"PA","01","UN", revision, statusCode,responseData);
                 }
                 catch (Exception ex)
                 {
@@ -133,7 +133,7 @@ namespace Web_Service
                     Console.WriteLine($"Código de estado: {statusCode}");
                     Console.WriteLine("Respuesta del servicio:");
                     Console.WriteLine(responseData);
-                    //ActualizarBase(statusCode, responseData, codigo, descripcion);
+                    ActualizarBase(statusCode, responseData, codigo, descripcion);
                 }
                 catch (Exception ex)
                 {

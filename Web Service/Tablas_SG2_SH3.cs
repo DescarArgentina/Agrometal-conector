@@ -13,6 +13,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using static Web_Service.Program;
+using static Web_Service.Tablas_SG2_SH3;
 
 namespace Web_Service
 {
@@ -24,107 +26,155 @@ namespace Web_Service
             public int? errorCode { get; set; }
             public string errorMessage { get; set; }
         }
-        public static async Task postSG2_SH3(string jsonData)
+        //public static async Task postSG2_SH3(string jsonData)
+        //{
+        //    string url = "http://119.8.73.193:8086/rest/TCProceso/Incluir/"; // URL del servicio REST
+
+        //    string username = "USERREST"; // Usuario proporcionado
+        //    string password = "restagr"; // Contraseña proporcionada
+
+
+        //    using (HttpClient client = new HttpClient())
+        //    {
+        //        try
+        //        {
+        //            // Configurar credenciales Basic Auth
+        //            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
+        //            client.DefaultRequestHeaders.Authorization =
+        //                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+
+        //            // Configurar el contenido de la solicitud
+        //            var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+
+        //            // Realizar la solicitud POST
+        //            HttpResponseMessage response = await client.PostAsync(url, content);
+
+        //            // Leer la respuesta como string
+        //            string responseData = await response.Content.ReadAsStringAsync();
+
+        //            Console.WriteLine($"POST TCProceso -> {(int)response.StatusCode} {response.ReasonPhrase}\n{responseData}");
+
+        //            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        //            {
+        //                Console.WriteLine("Ya existe (409). Intentando PUT /Modificar...");
+        //                await putSG2_SH3(jsonData);     // llamada a la función PUT
+        //                return;                         // salimos después del PUT
+        //            }
+
+        //            // Si no fue 409, ahora sí validamos éxito del POST
+        //            //if (!response.IsSuccessStatusCode)
+        //            //{
+        //            //    //    var bodyErr = await response.Content.ReadAsStringAsync();
+        //            //    Console.WriteLine($"POST falló (no 409). Ver detalle arriba.");
+        //            //    return;
+        //            //}
+        //            //else
+        //            //{
+        //            //    Console.WriteLine("POST ok.");
+        //            //}
+
+        //            // Asegurarse de que la respuesta sea exitosa
+        //            response.EnsureSuccessStatusCode();
+
+        //            // Mostrar la respuesta en consola
+        //            Console.WriteLine("Respuesta del servicio:");
+        //            Console.WriteLine(responseData);
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
+        //        }
+        //    }
+        //}
+
+
+
+        //public static async Task putSG2_SH3(string jsonData)
+        //{
+        //    string url = "http://119.8.73.193:8086/rest/TCProceso/Modificar/";
+        //    string username = "USERREST";
+        //    string password = "restagr";
+
+        //    using (var client = new HttpClient())
+        //    {
+        //        try
+        //        {
+        //            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
+        //            client.DefaultRequestHeaders.Authorization =
+        //                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+
+        //            var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+
+        //            HttpResponseMessage response = await client.PutAsync(url, content);
+
+        //            if (!response.IsSuccessStatusCode)
+        //            {
+        //                var bodyErr = await response.Content.ReadAsStringAsync();
+        //                Console.WriteLine($"PUT falló: {(int)response.StatusCode} {response.ReasonPhrase}\n{bodyErr}");
+        //                return;
+        //            }
+
+        //            string responseData = await response.Content.ReadAsStringAsync();
+        //            Console.WriteLine("Respuesta del servicio (PUT ok):");
+        //            Console.WriteLine(responseData);
+        //            return;
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
+        //        }
+        //    }
+        //}
+        public static async Task EnviarSG2_SH3(string jsonData)
         {
-            string url = "http://119.8.73.193:8086/rest/TCProceso/Incluir"; // URL del servicio REST
-            
-            string username = "USERREST"; // Usuario proporcionado
-            string password = "restagr"; // Contraseña proporcionada
-
-            //string username = "USERREST"; // Usuario proporcionado
-            //string password = "restagr"; // Contraseña proporcionada
-
-            using (HttpClient client = new HttpClient())
-            {
-                try
-                {
-                    // Configurar credenciales Basic Auth
-                    var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-                    client.DefaultRequestHeaders.Authorization =
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
-
-                    // Configurar el contenido de la solicitud
-                    var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-
-                    // Realizar la solicitud POST
-                    HttpResponseMessage response = await client.PostAsync(url, content);
-
-                    // Leer la respuesta como string
-                    string responseData = await response.Content.ReadAsStringAsync();
-
-                    Console.WriteLine($"POST TCProceso -> {(int)response.StatusCode} {response.ReasonPhrase}\n{responseData}");
-
-                    if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
-                    {
-                        Console.WriteLine("Ya existe (409). Intentando PUT /Modificar...");
-                        await putSG2_SH3(jsonData);     // llamada a la función PUT
-                        return;                         // salimos después del PUT
-                    }
-
-                    // Si no fue 409, ahora sí validamos éxito del POST
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        //    var bodyErr = await response.Content.ReadAsStringAsync();
-                        Console.WriteLine($"POST falló (no 409). Ver detalle arriba.");
-                        //    return;
-                    }
-                    else
-                    {
-                        Console.WriteLine("POST ok.");
-                    }
-
-                    // Asegurarse de que la respuesta sea exitosa
-                    //response.EnsureSuccessStatusCode();
-
-                    // Leer la respuesta como string
-                    //string responseData = await response.Content.ReadAsStringAsync();
-
-                    // Mostrar la respuesta en consola
-                    Console.WriteLine("Respuesta del servicio:");
-                    Console.WriteLine(responseData);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
-                }
-            }
-        }
-
-
-
-        public static async Task putSG2_SH3(string jsonData)
-        {
-            string url = "http://119.8.73.193:8086/rest/TCProceso/Modificar/";
+            string urlPost = "http://119.8.73.193:8086/rest/TCProceso/Incluir/";
+            string urlPut = "http://119.8.73.193:8086/rest/TCProceso/Modificar/";
             string username = "USERREST";
             string password = "restagr";
 
-            using (var client = new HttpClient())
+            using var client = new HttpClient();
+            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+
+            // 1) Intento POST
+            var contentPost = new StringContent(jsonData, Encoding.UTF8, "application/json");
+            var responsePost = await client.PostAsync(urlPost, contentPost);
+            var bodyPost = await responsePost.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"POST TCProceso -> {(int)responsePost.StatusCode} {responsePost.ReasonPhrase}");
+            Console.WriteLine(bodyPost);
+
+            if (responsePost.IsSuccessStatusCode)
             {
-                try
-                {
-                    var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-                    client.DefaultRequestHeaders.Authorization =
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+                Console.WriteLine("POST OK, no hace falta PUT.");
+                return;
+            }
 
-                    var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+            // 2) Solo si es un caso de "ya existe", hago UN SOLO PUT
+            bool esRegistroExistente =
+                responsePost.StatusCode == System.Net.HttpStatusCode.Conflict ||
+                bodyPost.Contains("ya existe", StringComparison.OrdinalIgnoreCase) ||
+                bodyPost.Contains("Registro duplicado", StringComparison.OrdinalIgnoreCase);
 
-                    HttpResponseMessage response = await client.PutAsync(url, content);
+            if (!esRegistroExistente)
+            {
+                Console.WriteLine("POST falló por otra causa, NO se intenta PUT.");
+                return;
+            }
 
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var bodyErr = await response.Content.ReadAsStringAsync();
-                        Console.WriteLine($"PUT falló: {(int)response.StatusCode} {response.ReasonPhrase}\n{bodyErr}");
-                        return;
-                    }
+            Console.WriteLine("Intentando PUT /Modificar por registro existente...");
 
-                    string responseData = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine("Respuesta del servicio (PUT ok):");
-                    Console.WriteLine(responseData);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
-                }
+            var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
+            var responsePut = await client.PutAsync(urlPut, contentPut);
+            var bodyPut = await responsePut.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"PUT TCProceso -> {(int)responsePut.StatusCode} {responsePut.ReasonPhrase}");
+            Console.WriteLine(bodyPut);
+
+            if (!responsePut.IsSuccessStatusCode)
+            {
+                Console.WriteLine("PUT falló, no se reintenta para evitar bucles.");
             }
         }
 
@@ -151,141 +201,216 @@ namespace Web_Service
             return codigo;
         }
 
-        public static List<string> jsonSG2_SH3()
+        public static string NormalizarCentroTrabajo(string centroTrabajo)
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                      Integrated Security=True;TrustServerCertificate=True";
+            if (string.IsNullOrWhiteSpace(centroTrabajo))
+                return "000";  // valor por defecto si viene vacío
+
+            // Dejar solo dígitos (por si viniera con espacios o caracteres)
+            centroTrabajo = new string(centroTrabajo.Where(char.IsDigit).ToArray());
+
+            if (centroTrabajo.Length <= 3)
+                return centroTrabajo.PadLeft(3, '0');  // si tiene menos de 3 dígitos, completamos
+
+            return centroTrabajo.Substring(centroTrabajo.Length - 3); // últimos 3 dígitos
+        }
 
 
-            //string query = @"SELECT
-            //    p.catalogueId  AS Padre,          -- Proceso
-            //    op.catalogueId AS Hijo,           -- Operación
-            //    src.recurso    AS recurso,        -- productId o catalogueId (según origen)
-            //    uud.value,
-            //    calc.tiempo_fmt AS tiempo,        -- << reglas exactas solicitadas
-            //    op.name         AS descripcion,
-            //    calc.lote_val   AS loteStd        -- << reglas exactas solicitadas
-            //FROM Operation               AS op
-            //JOIN OperationRevision       AS opr    ON opr.masterRef      = op.id_Table
-            //JOIN ProcessOccurrence       AS po_op  ON po_op.instancedRef = opr.id_Table          -- PO de la operación
-            //JOIN ProcessOccurrence       AS po_pr  ON po_pr.id_Table     = po_op.parentRef       -- PO del proceso
-            //JOIN ProcessRevision         AS prev   ON prev.id_Table      = po_pr.instancedRef
-            //JOIN Process                 AS p      ON p.id_Table         = prev.masterRef
+        //Consulta con Workarea y recurso hijo
+        private const string consultaD_workarea_recurso = @"SELECT
+    p.catalogueId   AS Padre,
+    p.name          AS descripcion,
+    wa.catalogueId  AS centroTrabajo,
+    prod.productId  AS recurso, 
+    op.catalogueId  AS Operacion,
+    ta.tiempo_segundos,
+    ta.tiempo_fmt   AS tiempo,
+    ta.lote_val     AS loteStd,
+	ROW_NUMBER() OVER (
+        PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
+        ORDER BY prod.productId
+    ) AS nro_recurso
+FROM ProcessRevision        AS pr
+INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
+INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
 
-            ///* ----- Tiempo (según Forms) ----- */
-            //JOIN Form AS f_op
-            //  ON f_op.name = CONCAT(op.catalogueId, '/', opr.revision)
-            //JOIN Form AS f_time
-            //  ON f_time.id_Table = f_op.id_Table + 3
-            //JOIN UserValue_UserData AS uud
-            //  ON (
-            //       uud.id_Father = f_time.id_Table + 1
-            //     )
-            // AND uud.title = 'allocated_time'
+-- WorkArea
+INNER JOIN Occurrence             AS occ1 
+        ON occ1.parentRef = po.id_Table
+       AND occ1.subType   = 'MEWorkArea'
+INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
+INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
 
-            ///* ======= NORMALIZACIÓN DE TIEMPO Y LOTE SEGÚN TUS CONDICIONES ======= */
-            //CROSS APPLY (SELECT t = COALESCE(TRY_CAST(uud.value AS float), 0.0)) AS x
-            //CROSS APPLY (
-            //    SELECT
-            //        tiempo_fmt = CASE
-            //            WHEN x.t = 0.0
-            //                THEN '00.01'
-            //            WHEN x.t < 60
-            //                THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x.t * 60, 0), 108), ':', '.')
-            //            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x.t, 0), 108), ':', '.')
-            //        END,
-            //        lote_val = CASE
-            //            WHEN x.t < 60 THEN 60 ELSE 1
-            //        END
-            //) AS calc
+-- Recursos hijos de la WorkArea
+INNER JOIN WorkAreaOccurrence wao ON wao.instancedRef = war.id_Table
+INNER JOIN Occurrence occ2        ON occ2.parentRef   = wao.id_Table
+INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
+INNER JOIN Product prod             ON prod.id_Table     = prod_rev.masterRef
 
-            ///* ----- Recursos colgados de la operación/proceso (Occurrence.parentRef en ambos niveles) ----- */
-            //OUTER APPLY (
-            //    SELECT TOP 1
-            //        r.recurso,
-            //        r.tipo_recurso
-            //    FROM (
-            //        /* Product / Herramental / Máquina (prioridad 1) - hijos del PROCESO */
-            //        SELECT
-            //            occ.parentRef,
-            //            CAST(prod.productId AS varchar(50)) AS recurso,
-            //            prod.subType AS tipo_recurso,
-            //            1 AS prio
-            //        FROM Occurrence AS occ
-            //        JOIN ProductRevision AS prodrev
-            //          ON prodrev.id_Table = occ.instancedRef AND prodrev.idXml = occ.idXml
-            //        JOIN Product AS prod
-            //          ON prod.id_Table    = prodrev.masterRef AND prod.idXml    = prodrev.idXml
-            //        WHERE occ.idXml   = po_pr.idXml
-            //          AND occ.parentRef = po_pr.id_Table      -- << SOLO bajo el proceso
+-- Operaciones
+LEFT JOIN ProcessOccurrence po_op 
+        ON po_op.parentRef = po.id_Table
+LEFT JOIN OperationRevision op_rev 
+        ON op_rev.id_Table = po_op.instancedRef
+LEFT JOIN Operation op 
+        ON op.id_Table = op_rev.masterRef
 
-            //        UNION ALL
+OUTER APPLY (
+    SELECT TOP 1
+        uvud_time.value AS tiempo_segundos,
+        CASE
+            WHEN x2.t = 0.0 THEN '0.01'
+            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
+            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
+        END AS tiempo_fmt,
+        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
+    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+    JOIN AssociatedAttachment aa
+       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+    JOIN Form f_time
+       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+      AND f_time.subType = 'MEOpTimeAnalysis'
+    JOIN UserValue_UserData uvud_time
+       ON uvud_time.id_Father = f_time.id_Table + 1
+      AND uvud_time.title = 'allocated_time'
+    CROSS APPLY (
+        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
+    ) AS x2
+) AS ta
 
-            //        /* WorkArea (prioridad 2, excluye TERCEROS) - hijos del PROCESO */
-            //        SELECT
-            //            wao.parentRef,
-            //            CAST(wa.catalogueId AS varchar(50)) AS recurso,
-            //            'MEWorkArea' AS tipo_recurso,
-            //            2 AS prio
-            //        FROM WorkArea AS wa
-            //        JOIN WorkAreaRevision AS war
-            //          ON war.masterRef = wa.id_Table  AND war.idXml  = wa.idXml
-            //        JOIN Occurrence AS wao
-            //          ON wao.instancedRef = war.id_Table AND wao.idXml = war.idXml
-            //        WHERE wao.idXml   = po_pr.idXml
-            //          AND wao.parentRef = po_pr.id_Table   -- << SOLO bajo el proceso
-            //          AND COALESCE(war.name, wa.name) COLLATE Latin1_General_CI_AI NOT LIKE '%TERCEROS%'
-            //    ) AS r
-            //    /* Priorizar MEResource / METool / MENCMachine sobre WorkArea */
-            //    ORDER BY CASE
-            //                WHEN r.tipo_recurso IN ('MEResource','Mfg0MEResource','METool','Mfg0METool','MENCMachine','Mfg0MENCMachine') THEN 0
-            //                ELSE 1
-            //             END,
-            //             r.prio
-            //) AS src
+ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+        //Consulta para los xml que vienen sin WorkAreaOccurrence
+        private const string ConsultaA_ConWorkArea_SinWAO = @"
+SELECT
+    p.catalogueId   AS Padre,
+    p.name          AS descripcion,
+    wa.catalogueId  AS centroTrabajo,
+    prod.productId  AS recurso, 
+    op.catalogueId  AS Operacion,
+    ta.tiempo_segundos,
+    ta.tiempo_fmt   AS tiempo,
+    ta.lote_val     AS loteStd,
+    ROW_NUMBER() OVER (
+        PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
+        ORDER BY prod.productId
+    ) AS nro_recurso
+FROM ProcessRevision        AS pr
+INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
+INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
 
-            ///* ----- Excluir operaciones “TERCEROS …” ----- */
-            //WHERE p.catalogueId LIKE 'PR%'
-            //  AND op.name COLLATE Latin1_General_CI_AI NOT LIKE '%TERCEROS%'
-            //  AND src.recurso IS NOT NULL";
+-- WorkArea hija del PR
+INNER JOIN Occurrence             AS occ1 
+        ON occ1.parentRef = po.id_Table
+       AND occ1.subType   = 'MEWorkArea'
+INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
+INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
 
+-- Recursos: hijos de la WorkArea sin usar WorkAreaOccurrence
+INNER JOIN Occurrence occ2        
+        ON occ2.parentRef   = occ1.id_Table
+INNER JOIN ProductRevision prod_rev 
+        ON prod_rev.id_Table = occ2.instancedRef
+INNER JOIN Product prod           
+        ON prod.id_Table     = prod_rev.masterRef
 
-            string query = @"
-            SELECT
-    p.catalogueId  AS Padre,          -- Proceso
-    op.catalogueId AS Hijo,           -- Operación
-    src.recurso    AS recurso,        -- productId o catalogueId (según origen)
-    uud.value,
-    calc.tiempo_fmt AS tiempo,        -- reglas de formato
-    op.name         AS descripcion,
-    calc.lote_val   AS loteStd
-FROM Operation               AS op
-JOIN OperationRevision       AS opr    ON opr.masterRef      = op.id_Table
-JOIN ProcessOccurrence       AS po_op  ON po_op.instancedRef = opr.id_Table
-JOIN ProcessOccurrence       AS po_pr  ON po_pr.id_Table     = po_op.parentRef
-JOIN ProcessRevision         AS prev   ON prev.id_Table      = po_pr.instancedRef
-JOIN Process                 AS p      ON p.id_Table         = prev.masterRef
+-- Operaciones
+LEFT JOIN ProcessOccurrence po_op 
+        ON po_op.parentRef = po.id_Table
+LEFT JOIN OperationRevision op_rev 
+        ON op_rev.id_Table = po_op.instancedRef
+LEFT JOIN Operation op 
+        ON op.id_Table = op_rev.masterRef
 
-/* ----- FIX: resolver el nombre del Form de la operación sin '-OP' ----- */
+-- Tiempo por operación
+OUTER APPLY (
+    SELECT TOP 1
+        uvud_time.value AS tiempo_segundos,
+        CASE
+            WHEN x2.t = 0.0 THEN '0.01'
+            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
+            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
+        END AS tiempo_fmt,
+        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
+    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+    JOIN AssociatedAttachment aa
+       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+    JOIN Form f_time
+       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+      AND f_time.subType = 'MEOpTimeAnalysis'
+    JOIN UserValue_UserData uvud_time
+       ON uvud_time.id_Father = f_time.id_Table + 1
+      AND uvud_time.title = 'allocated_time'
+    CROSS APPLY (
+        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
+    ) AS x2
+) AS ta
+
+ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
+";
+        //Consulta para los xml que vienen sin WorkArea
+        private const string consultaB_sin_workarea = @"SELECT
+    p.catalogueId   AS Padre,
+    p.name          AS descripcion,
+    NULL            AS centroTrabajo,          -- no hay WA
+    prod.productId  AS recurso,          -- recurso real
+
+    uud.value               AS tiempo_segundos,
+    calc.tiempo_fmt         AS tiempo,
+    calc.lote_val           AS loteStd,
+    --pr_ins.sequenceNumber   AS nro_busqueda,
+    op.catalogueId          AS Operacion,
+    ROW_NUMBER() OVER (PARTITION BY p.catalogueId ORDER BY op.catalogueId) AS nro_recurso
+
+FROM ProcessRevision        AS pr
+JOIN Process                AS p
+      ON p.id_Table = pr.masterRef
+
+-- Proceso / subproceso
+JOIN ProcessOccurrence      AS po
+      ON po.instancedRef = pr.id_Table
+
+-- Recursos: hijos directos del PR (sin WorkArea)
+JOIN Occurrence             AS occ2
+      ON occ2.parentRef = po.id_Table
+
+JOIN ProductRevision        AS prod_rev
+      ON prod_rev.id_Table = occ2.instancedRef
+
+JOIN Product                AS prod
+      ON prod.id_Table = prod_rev.masterRef
+
+-- Form maestro de proceso + TimeAnalysis
+LEFT JOIN Form AS f_proc
+       ON f_proc.name = CONCAT(p.catalogueId, '/', pr.revision)
+
+LEFT JOIN Form AS f_time
+       ON f_time.id_Table = f_proc.id_Table + 3
+
+LEFT JOIN UserValue_UserData AS uud
+       ON uud.id_Father = f_time.id_Table + 1
+      AND uud.title = 'allocated_time'
+
+-- Vista e instancia de proceso (para nro_busqueda)
+INNER JOIN ProcessRevisionView pr_view 
+        ON RIGHT(pr_view.revisionRef, LEN(pr_view.revisionRef) - 3) = pr.id_Table
+
+INNER JOIN ProcessInstance pr_ins 
+        ON RIGHT(pr_ins.partRef, LEN(pr_ins.partRef) - 3) = pr_view.id_Table
+
+-- Operaciones
+INNER JOIN ProcessOccurrence po_op 
+        ON po_op.parentRef = po.id_Table
+
+INNER JOIN OperationRevision op_rev 
+        ON op_rev.id_Table = po_op.instancedRef
+
+INNER JOIN Operation op 
+        ON op.id_Table = op_rev.masterRef
+
+-- Cálculo de tiempo
 CROSS APPLY (
-  SELECT CASE
-           WHEN RIGHT(op.catalogueId, 3) = '-OP' THEN LEFT(op.catalogueId, LEN(op.catalogueId) - 3)
-           WHEN CHARINDEX('-OP', op.catalogueId) > 0 THEN REPLACE(op.catalogueId, '-OP', '')
-           ELSE op.catalogueId
-         END AS op_code_base
-) AS x
-JOIN Form AS f_op
-  ON f_op.name = CONCAT(x.op_code_base, '/', opr.revision)
-
-/* ----- Tiempo (según Forms) ----- */
-JOIN Form AS f_time
-  ON f_time.id_Table = f_op.id_Table + 3
-JOIN UserValue_UserData AS uud
-  ON uud.id_Father = f_time.id_Table + 1
- AND uud.title = 'allocated_time'
-
-/* ======= Normalización de tiempo y lote ======= */
-CROSS APPLY (SELECT t = COALESCE(TRY_CAST(uud.value AS float), 0.0)) AS x2
+    SELECT t = COALESCE(TRY_CAST(uud.value AS float), 0.0)
+) AS x2
 CROSS APPLY (
     SELECT
         tiempo_fmt = CASE
@@ -296,100 +421,193 @@ CROSS APPLY (
         lote_val = CASE WHEN x2.t < 60 THEN 60 ELSE 1 END
 ) AS calc
 
-/* ----- Recursos colgados del proceso ----- */
+-- Solo filas que tengan recurso
+--WHERE prod.productId IS NOT NULL
+
+ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+
+        //Consulta para los xml que vienen con WorkArea que apunta directo a ProductRevision
+        private const string ConsultaC_WorkAreaEspecial = @"
+-- MEWorkArea que apunta directo a ProductRevision
+
+SELECT
+    p.catalogueId   AS Padre,
+    p.name          AS descripcion,
+    NULL            AS centroTrabajo,
+    wa_inst.productId  AS recurso,     -- la máquina/estación como recurso
+    op.catalogueId  AS Operacion,
+    ta.tiempo_segundos,
+    ta.tiempo_fmt   AS tiempo,
+    ta.lote_val     AS loteStd
+
+FROM ProcessRevision pr
+JOIN Process p 
+       ON p.id_Table = pr.masterRef
+JOIN ProcessOccurrence po
+       ON po.instancedRef = pr.id_Table
+
+-- MEWorkArea -> ProductRevision
+JOIN Occurrence occ_wa
+       ON occ_wa.parentRef = po.id_Table
+      AND occ_wa.subType   = 'MEWorkArea'
+JOIN ProductRevision prod_rev
+       ON prod_rev.id_Table = occ_wa.instancedRef
+JOIN Product wa_inst
+       ON wa_inst.id_Table = prod_rev.masterRef
+
+-- Operaciones
+LEFT JOIN ProcessOccurrence po_op 
+       ON po_op.parentRef = po.id_Table
+LEFT JOIN OperationRevision op_rev 
+       ON op_rev.id_Table = po_op.instancedRef
+LEFT JOIN Operation op 
+       ON op.id_Table = op_rev.masterRef
+
+-- Tiempo por operación
 OUTER APPLY (
-    SELECT TOP (1)
-        r.recurso,
-        r.tipo_recurso,
-        r.src_from   -- para depurar: 'PROC' o 'OP'
-    FROM (
-        /* 1) Bajo el ProcessOccurrence (hermano de la OP) */
-        SELECT
-            occ.parentRef,
-            CAST(prod.productId AS varchar(50)) AS recurso,
-            prod.subType                         AS tipo_recurso,
-            'PROC'                               AS src_from,
-            1                                    AS prio
-        FROM dbo.Occurrence        AS occ
-        JOIN dbo.ProductRevision   AS prodRev ON prodRev.id_Table = occ.instancedRef AND prodRev.idXml = occ.idXml
-        JOIN dbo.Product           AS prod    ON prod.id_Table    = prodRev.masterRef AND prod.idXml   = prodRev.idXml
-        WHERE occ.parentRef = po_pr.id_Table
-          AND occ.idXml    = po_pr.idXml
-          AND prod.subType IN ('MEResource','Mfg0MEResource','METool','Mfg0METool','MENCMachine','Mfg0MENCMachine')
+    SELECT TOP 1
+        uvud_time.value AS tiempo_segundos,
+        CASE
+            WHEN x2.t = 0.0 THEN '0.01'
+            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
+            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
+        END AS tiempo_fmt,
+        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
+    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+    JOIN AssociatedAttachment aa
+        ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+    JOIN Form f_time
+        ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+       AND f_time.subType = 'MEOpTimeAnalysis'
+    JOIN UserValue_UserData uvud_time
+        ON uvud_time.id_Father = f_time.id_Table + 1
+       AND uvud_time.title = 'allocated_time'
+    CROSS APPLY (
+        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
+    ) AS x2
+) AS ta
 
-        UNION ALL
-        SELECT
-            wao.parentRef,
-            CAST(wa.catalogueId AS varchar(50)) AS recurso,
-            'MEWorkArea'                        AS tipo_recurso,
-            'PROC'                              AS src_from,
-            2                                   AS prio
-        FROM dbo.WorkArea           AS wa
-        JOIN dbo.WorkAreaRevision   AS waRev ON waRev.masterRef = wa.id_Table  AND waRev.idXml = wa.idXml
-        JOIN dbo.Occurrence         AS wao   ON wao.instancedRef = waRev.id_Table AND wao.idXml = waRev.idXml
-        WHERE wao.parentRef = po_pr.id_Table
-          AND wao.idXml    = po_pr.idXml
-          AND COALESCE(waRev.name, wa.name) COLLATE Latin1_General_CI_AI NOT LIKE '%TERCEROS%'
-
-        /* 2) Fallback: bajo el OperationOccurrence (hijo de la OP) */
-        UNION ALL
-        SELECT
-            occ.parentRef,
-            CAST(prod.productId AS varchar(50)) AS recurso,
-            prod.subType                         AS tipo_recurso,
-            'OP'                                 AS src_from,
-            3                                    AS prio
-        FROM dbo.Occurrence        AS occ
-        JOIN dbo.ProductRevision   AS prodRev ON prodRev.id_Table = occ.instancedRef AND prodRev.idXml = occ.idXml
-        JOIN dbo.Product           AS prod    ON prod.id_Table    = prodRev.masterRef AND prod.idXml   = prodRev.idXml
-        WHERE occ.parentRef = po_op.id_Table
-          AND occ.idXml    = po_op.idXml
-          AND prod.subType IN ('MEResource','Mfg0MEResource','METool','Mfg0METool','MENCMachine','Mfg0MENCMachine')
-        -- ojo: NO incluimos materias primas (ej. 'Agm4_MatPrima', 'MEConsumed')
-
- UNION ALL
-        SELECT
-            wao.parentRef,
-            CAST(wa.catalogueId AS varchar(50)) AS recurso,
-            'MEWorkArea'                        AS tipo_recurso,
-            'OP'                                AS src_from,
-            4                                   AS prio
-        FROM dbo.WorkArea           AS wa
-        JOIN dbo.WorkAreaRevision   AS waRev ON waRev.masterRef = wa.id_Table  AND waRev.idXml = wa.idXml
-        JOIN dbo.Occurrence         AS wao   ON wao.instancedRef = waRev.id_Table AND wao.idXml = waRev.idXml
-        WHERE wao.parentRef = po_op.id_Table
-          AND wao.idXml    = po_op.idXml
-          AND COALESCE(waRev.name, wa.name) COLLATE Latin1_General_CI_AI NOT LIKE '%TERCEROS%'
-    ) AS r
-    ORDER BY 
-        CASE WHEN r.tipo_recurso IN ('MEResource','Mfg0MEResource','METool','Mfg0METool','MENCMachine','Mfg0MENCMachine') THEN 0 ELSE 1 END,
-        r.prio
-) AS src
-
-/* ----- Filtros ----- */
-WHERE p.catalogueId LIKE 'PR%'
-  AND op.name COLLATE Latin1_General_CI_AI NOT LIKE '%TERCEROS%'
-  AND src.recurso IS NOT NULL";
+ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
+";
 
 
+        public static string ObtenerConsultaRecursos(SqlConnection connection)
+        {
+            bool hayWorkArea = false;
+            bool esWorkAreaNormal = false;
+            bool esWorkAreaEspecial = false;
+            bool existeTablaWAO = false;
 
+            // ¿Existe físicamente la tabla WorkArea?
+            // Si existe, este XML tenía nodo <WorkArea>
+            using (var cmd = new SqlCommand(
+                "SELECT OBJECT_ID('WorkArea', 'U');", connection))
+            {
+                var res = cmd.ExecuteScalar();
+                hayWorkArea = (res != null && res != DBNull.Value);
+            }
+
+            if (hayWorkArea)
+            {
+                // Caso A: MEWorkArea -> WorkAreaRevision
+                using (var cmd = new SqlCommand(@"
+            SELECT TOP 1 1
+            FROM Occurrence o
+            JOIN WorkAreaRevision war ON war.id_Table = o.instancedRef
+            WHERE o.subType = 'MEWorkArea';", connection))
+                {
+                    var res = cmd.ExecuteScalar();
+                    esWorkAreaNormal = (res != null && res != DBNull.Value);
+                }
+
+                // Caso C: MEWorkArea -> ProductRevision directo
+                using (var cmd = new SqlCommand(@"
+            SELECT TOP 1 1
+            FROM Occurrence o
+            JOIN ProductRevision pr ON pr.id_Table = o.instancedRef
+            WHERE o.subType = 'MEWorkArea';", connection))
+                {
+                    var res = cmd.ExecuteScalar();
+                    esWorkAreaEspecial = (res != null && res != DBNull.Value);
+                }
+
+                // ¿Existe físicamente la tabla WorkAreaOccurrence?
+                using (var cmd = new SqlCommand(
+                    "SELECT OBJECT_ID('WorkAreaOccurrence', 'U');", connection))
+                {
+                    var res = cmd.ExecuteScalar();
+                    existeTablaWAO = (res != null && res != DBNull.Value);
+                }
+            }
+
+            Utilidades.EscribirEnLog(
+                "ObtenerQueryRecursos -> hayWorkArea=" + hayWorkArea +
+                ", normal=" + esWorkAreaNormal +
+                ", especial=" + esWorkAreaEspecial +
+                ", existeWAO=" + existeTablaWAO);
+
+            Utilidades.EscribirEnLog("Query elegida: " +
+                (!hayWorkArea ? "B" :
+                 esWorkAreaNormal && existeTablaWAO ? "A_WAO" :
+                 esWorkAreaNormal && !existeTablaWAO ? "A_SinWAO" :
+                 esWorkAreaEspecial ? "C" : "NINGUNA"));
+
+            // 🔀 Selección de consulta según combinación detectada
+
+            if (!hayWorkArea)
+                return consultaB_sin_workarea;              // sin WorkArea
+
+            if (esWorkAreaNormal)
+            {
+                if (existeTablaWAO)
+                    return consultaD_workarea_recurso;      // usa WorkAreaOccurrence (A_WAO)
+                else
+                    return ConsultaA_ConWorkArea_SinWAO;   // sin WorkAreaOccurrence (A_SinWAO)
+            }
+
+            if (esWorkAreaEspecial)
+                return ConsultaC_WorkAreaEspecial;         // MEWorkArea -> ProductRevision (C)
+
+            throw new Exception("No se pudo determinar el tipo de WorkArea para este XML.");
+        }
+
+
+
+        public static List<string> jsonSG2_SH3()
+        {
+            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+                                      Integrated Security=True;TrustServerCertificate=True";
 
 
             List<string> jsonProductos = new List<string>();
+            Utilidades.EscribirEnLog("jsonSG2_SH3 -> entrando al método");
 
             try
             {
                 using (SqlConnection connection = new SqlConnection(connectionString))
                 {
-                    SqlCommand command = new SqlCommand(query, connection);
                     connection.Open();
+                    Utilidades.EscribirEnLog("jsonSG2_SH3 -> conexión abierta");
+                    string query = ObtenerConsultaRecursos(connection);
+                    Utilidades.EscribirEnLog("jsonSG2_SH3 -> query elegida:\n" + query);
+                    SqlCommand command = new SqlCommand(query, connection);
                     SqlDataReader reader = command.ExecuteReader();
 
+                    int filas = 0;
                     Dictionary<string, dynamic> productosDict = new Dictionary<string, dynamic>();
-                    Dictionary<string, Dictionary<string, int>> productoRecursoOperacion = new Dictionary<string, Dictionary<string, int>>();
+                    //Dictionary<string, Dictionary<string, int>> productoRecursoOperacion = new Dictionary<string, Dictionary<string, int>>();
+                    var procPorProductoOperacion = new Dictionary<string, Procedimiento>();
+                    var ultimoPasoPorProducto = new Dictionary<string, int>();
 
                     while (reader.Read())
                     {
+                        filas++;
+                        // DEBUG: logueamos la primera fila para ver qué trae
+                        if (filas <= 3)
+                        {
+                            Utilidades.EscribirEnLog(
+                                $"jsonSG2_SH3 -> fila {filas}: Padre={reader["Padre"]}, recurso={reader["recurso"]}, op={reader["Operacion"]}, tiempo={reader["tiempo"]}");
+                        }
                         string producto = reader["Padre"]?.ToString();
                         string codigo = "01";
 
@@ -408,53 +626,121 @@ WHERE p.catalogueId LIKE 'PR%'
                         recurso = NormalizarCodigo(recurso);
                         string nombreOperacion = reader["descripcion"]?.ToString();
                         string lote = reader["loteStd"]?.ToString();
+                        string centroTrabajo = reader["centroTrabajo"]?.ToString();
+                        centroTrabajo = NormalizarCentroTrabajo(centroTrabajo);
+                        string operacion = reader["Operacion"]?.ToString();
 
-                        // Asignar operacion (incrementa por recurso)
-                        if (!productoRecursoOperacion.ContainsKey(producto))
+                        int nroRecurso = Convert.ToInt32(reader["nro_recurso"]);                     
+
+                         // Asignar operacion (incrementa por recurso)
+                        //if (!productoRecursoOperacion.ContainsKey(producto))
+                        //{
+                        //    productoRecursoOperacion[producto] = new Dictionary<string, int>();
+                        //}
+
+                        //int operacionActual = 10;
+                        //if (productoRecursoOperacion[producto].ContainsKey(recurso))
+                        //{
+                        //    operacionActual = productoRecursoOperacion[producto][recurso] + 10;
+                        //}
+                        //productoRecursoOperacion[producto][recurso] = operacionActual;
+
+                        /*string operacion = operacionActual.ToString("D2");*/ // Formato 0010, 0020, etc.
+
+                        //clave unica para cada op
+                        string keyProc = producto + "_" + operacion;
+
+                        if (!procPorProductoOperacion.ContainsKey(keyProc))
                         {
-                            productoRecursoOperacion[producto] = new Dictionary<string, int>();
+                            int operacionActual = 10;
+                            if (ultimoPasoPorProducto.ContainsKey(producto))
+                            {
+                                operacionActual = ultimoPasoPorProducto[producto] + 10;
+                            }
+                            ultimoPasoPorProducto[producto] = operacionActual;
+                            string operacionPaso = operacionActual.ToString("D2");
+
+                            var nuevoProc = new Procedimiento
+                            {
+                                detalle = new List<CampoValor>
+                                {
+                                    new CampoValor { campo = "operacion",   valor = operacionPaso },
+                                    new CampoValor { campo = "recurso",     valor = "" },  // se completa con el principal
+                                    new CampoValor { campo = "tiempo",      valor = tiempo },
+                                    new CampoValor { campo = "centroTrabajo", valor = centroTrabajo },
+                                    new CampoValor { campo = "descripcion", valor = nombreOperacion },
+                                    new CampoValor { campo = "loteStd",     valor = lote }
+                                },
+                                alternativos = new List<CampoValor>()
+                            };
+
+                            procPorProductoOperacion[keyProc] = nuevoProc;
+
+                            //if (!productosDict.ContainsKey(producto))
+                            //{
+                            //    productosDict[producto] = new
+                            //    {
+                            //        codigo = codigo,
+                            //        producto = producto,
+                            //        procedimiento = new List<Procedimiento>()
+                            //    };
+                            //}
+
+                            //productosDict[producto].procedimiento.Add(nuevoProc);
+                            if (productosDict.ContainsKey(producto))
+                            {
+                                productosDict[producto].procedimiento.Add(nuevoProc);
+                            }
+                            else
+                            {
+                                productosDict[producto] = new
+                                {
+                                    codigo = codigo,
+                                    producto = producto,
+                                    procedimiento = new List<Procedimiento> { nuevoProc }
+                                };
+                            }
                         }
 
-                        int operacionActual = 10;
-                        if (productoRecursoOperacion[producto].ContainsKey(recurso))
-                        {
-                            operacionActual = productoRecursoOperacion[producto][recurso] + 10;
-                        }
-                        productoRecursoOperacion[producto][recurso] = operacionActual;
+                        Procedimiento proc = procPorProductoOperacion[keyProc];
 
-                        string operacion = operacionActual.ToString("D2"); // Formato 0010, 0020, etc.
-
-                        var procedimiento = new Procedimiento
+                        if (nroRecurso == 1)
                         {
-                            detalle = new List<CampoValor>
-                    {
-                        new CampoValor { campo = "operacion", valor = operacion },
-                        new CampoValor { campo = "recurso", valor = recurso },
-                        new CampoValor { campo = "tiempo", valor = tiempo },
-                        new CampoValor { campo = "descripcion", valor = nombreOperacion },
-                        new CampoValor { campo = "loteStd", valor = lote }
-                    }
-                        };
+                            //Recurso principal
+                            var campoRecurso = proc.detalle.First(x => x.campo == "recurso");
+                            campoRecurso.valor = recurso;
 
-                        if (productosDict.ContainsKey(producto))
-                        {
-                            productosDict[producto].procedimiento.Add(procedimiento);
+                            var campoTiempo = proc.detalle.First(x => x.campo == "tiempo");
+                            campoTiempo.valor = tiempo;
                         }
                         else
                         {
-                            productosDict[producto] = new
+                            //Recurso alternativo
+                            proc.alternativos.Add(new CampoValor
                             {
-                                codigo = codigo,
-                                producto = producto,
-                                procedimiento = new List<Procedimiento> { procedimiento }
-                            };
+                                campo = "recursoAlt",
+                                valor = recurso,
+                                
+                            });
+                            proc.alternativos.Add(new CampoValor
+                            {
+                                campo = "tipoAlt",
+                                valor = "A"
+                            });
                         }
+
+                       
                     }
+
+                    Utilidades.EscribirEnLog($"jsonSG2_SH3 -> filas leídas de la query: {filas}");
+                    Utilidades.EscribirEnLog($"jsonSG2_SH3 -> productosDict.Count = {productosDict.Count}");
+
 
                     foreach (var item in productosDict.Values)
                     {
                         string json = JsonConvert.SerializeObject(item, Formatting.Indented);
                         Console.WriteLine(json);
+                        Utilidades.EscribirEnLog("jsonSG2_SH3 -> JSON generado:\n" + json);
                         jsonProductos.Add(json);
                     }
                 }
@@ -462,6 +748,7 @@ WHERE p.catalogueId LIKE 'PR%'
             catch (Exception ex)
             {
                 Console.WriteLine("Error: " + ex.Message);
+                Utilidades.EscribirEnLog("Error en jsonSG2_SH3: " + ex.Message);
             }
 
             return jsonProductos;
@@ -469,92 +756,6 @@ WHERE p.catalogueId LIKE 'PR%'
         }
 
 
-
-        //    List<string> jsonProductos = new List<string>();
-        //    try
-        //    {
-        //        using (SqlConnection connection = new SqlConnection(connectionString))
-        //        {
-        //            SqlCommand command = new SqlCommand(query, connection);
-        //            connection.Open();
-        //            SqlDataReader reader = command.ExecuteReader();
-
-        //            Dictionary<string, dynamic> productosDict = new Dictionary<string, dynamic>();
-
-        //            while (reader.Read())
-        //            {
-        //                string producto = reader["codigo"].ToString();
-        //                string codigo = "01"; // Se mantiene como constante por ahora
-
-        //                string tiempo = reader["tiempo"].ToString().Replace(',','.');
-        //                if (decimal.TryParse(tiempo, NumberStyles.Any, CultureInfo.InvariantCulture, out var valorDecimal))
-        //                {
-        //                    // 3. Redondeamos/truncamos a 2 decimales
-        //                    //    - Para redondear: Math.Round(valorDecimal, 2, MidpointRounding.AwayFromZero)
-        //                    //    - Aquí usamos ToString("0.##") para mostrar hasta 2 decimales (no rellena ceros)
-        //                    tiempo = valorDecimal
-        //                        .ToString("0.##", CultureInfo.InvariantCulture);
-        //                }
-        //                string operacion = reader["Operacion"].ToString();
-        //                string recurso = reader["instancedWorkArea"].ToString();
-        //                string nombreOperacion = reader["Operation_name"].ToString();
-        //                string lote = reader["loteStd"].ToString();
-
-        //                // Crear el procedimiento
-        //                var procedimiento = new Procedimiento
-        //                {
-        //                    detalle = new List<CampoValor>
-        //        {
-        //            new CampoValor { campo = "operacion", valor = operacion },
-        //            new CampoValor { campo = "recurso", valor = recurso },
-        //            new CampoValor { campo = "tiempo", valor = tiempo },
-        //            new CampoValor {campo = "descripcion", valor = nombreOperacion},
-        //            new CampoValor {campo= "loteStd", valor = lote }
-        //        }
-        //                };
-
-        //                // Verificar si el producto ya está en el diccionario
-        //                //if (productosDict.ContainsKey(producto))
-        //                //{
-        //                //    productosDict[producto].procedimiento.Add(procedimiento);
-        //                //}
-        //                //else
-        //                //{
-        //                //    productosDict[producto] = new
-        //                //    {
-        //                //        codigo = codigo,
-        //                //        producto = producto,
-        //                //        procedimiento = new List<Procedimiento> { procedimiento }
-        //                //    };
-        //                //}
-
-
-        //                productosDict[producto] = new
-        //                {
-        //                    codigo = codigo,
-        //                    producto = producto,
-        //                    procedimiento = new List<Procedimiento> { procedimiento }
-        //                };
-
-
-        //            }
-
-        //            // Convertir cada elemento del diccionario en JSON
-        //            foreach (var item in productosDict.Values)
-        //            {
-        //                string json = JsonConvert.SerializeObject(item, Formatting.Indented);
-        //                Console.WriteLine(json);
-        //                jsonProductos.Add(json);
-        //            }
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Console.WriteLine("Error: " + ex.Message);
-        //    }
-
-        //    return jsonProductos;
-        //}
 
         public static List<string> jsonSB1_BOP()
         {
@@ -639,7 +840,7 @@ WHERE p.catalogueId LIKE 'PR%'
 
 
 
-            string query = @"WITH FirstProcessName AS(
+            string query = @"WITH FirstProcess_codigo AS(
                             SELECT RIGHT(catalogueId,6) first_process_name
                           FROM Process p
                           INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
@@ -657,7 +858,7 @@ WHERE p.catalogueId LIKE 'PR%'
             fpn.first_process_name AS Process_name,
             pr.subType
             FROM Operation O
-            CROSS JOIN FirstProcessName fpn
+            CROSS JOIN FirstProcess_codigo fpn
             INNER JOIN OperationRevision OpR ON OpR.masterRef = o.id_Table
             INNER JOIN ProcessOccurrence po ON po.instancedRef = OpR.id_Table
             --INNER JOIN Form f ON f.name = CONCAT(o.catalogueId, '/', OpR.revision)
@@ -705,7 +906,7 @@ WHERE p.catalogueId LIKE 'PR%'
             FROM Product p
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
             INNER JOIN Occurrence o ON o.instancedRef = pr.id_Table
-            CROSS JOIN FirstProcessName fpn
+            CROSS JOIN FirstProcess_codigo fpn
             WHERE o.subType = 'MEConsumed' OR pr.subType LIKE '%MatPrima%'
             GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType
 			ORDER BY uud2.value DESC, p.catalogueId DESC";
@@ -759,6 +960,7 @@ WHERE p.catalogueId LIKE 'PR%'
         public class Procedimiento
         {
             public List<CampoValor> detalle { get; set; }
+            public List<CampoValor> alternativos { get; set; }
         }
 
         public class CampoValor

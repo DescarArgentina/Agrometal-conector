@@ -35,8 +35,8 @@ namespace Web_Service
         {
             // Crear una lista de nombres de nodos a ignorar
             var listaIgnorados = new List<string> { "ApplicationRef", "AssociatedDataSet", "AttributeContext", "DataSet",
-                                                        "ExternalFile", "Folder", "InstanceGraph", "ProductDef", "ProductInstance",
-                                                        "ProductRevisionView", "RevisionRule", "Site", "Transform", "View" };
+                                                        "ExternalFile", "Folder", "ProductDef",
+                                                         "RevisionRule", "Site", "Transform", "View" };
             try
             {
                 if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
