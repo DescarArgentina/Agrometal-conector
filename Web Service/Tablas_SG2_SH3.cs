@@ -912,50 +912,51 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 			ORDER BY uud2.value DESC, p.catalogueId DESC";
 
 
-            List<string> jsonProductos = new List<string>();
+            var productosDict = new Dictionary<string, string>(); // codigo -> json
 
-            try
+            using (SqlConnection connection = new SqlConnection(connectionString))
             {
-                using (SqlConnection connection = new SqlConnection(connectionString))
+                connection.Open();
+                using (SqlCommand command = new SqlCommand(query, connection))
+                using (SqlDataReader reader = command.ExecuteReader())
                 {
-                    connection.Open();
-
-                    //Aseguro el schema con subType
-                    using (var patchCmd = new SqlCommand(schemaPatch, connection))
+                    while (reader.Read())
                     {
-                        patchCmd.ExecuteNonQuery();
+                        string codigo = reader["codigo"].ToString();
+                        string descripcion = reader["Descripcion"].ToString();
+                        string tipo = reader["tipo"].ToString();
+                        string deposito = reader["deposito"].ToString();
+                        string unMedida = reader["unMedida"].ToString();
+                        string revision = reader["Revision"].ToString();
+
+                        var producto = new
+                        {
+                            producto = new List<Dictionary<string, string>>
+                    {
+                        new() { { "campo", "codigo"      }, { "valor", codigo      } },
+                        new() { { "campo", "descripcion" }, { "valor", descripcion } },
+                        new() { { "campo", "tipo"        }, { "valor", tipo        } },
+                        new() { { "campo", "deposito"    }, { "valor", deposito    } },
+                        new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
+                        new() { { "campo", "revEstruct"  }, { "valor", revision    } },
                     }
+                        };
 
-                    using (SqlCommand command = new SqlCommand(query, connection))
-                    using (SqlDataReader reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            // Construir el JSON para cada producto
-                            var producto = new
-                            {
-                                producto = new List<Dictionary<string, string>>
-                        {
-                            new Dictionary<string, string> { { "campo", "codigo" }, { "valor", reader["codigo"].ToString() } },
-                            new Dictionary<string, string> { { "campo", "descripcion" }, { "valor", reader["descripcion"].ToString() } },
-                            new Dictionary<string, string> { { "campo", "tipo" }, { "valor", reader["tipo"].ToString() } },
-                            new Dictionary<string, string> { { "campo", "deposito" }, { "valor", reader["deposito"].ToString() } },
-                            new Dictionary<string, string> { { "campo", "unMedida" }, { "valor", reader["Unidad de Medida"].ToString() } }
-                        }
-                            };
+                        string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
 
-                            string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
-                            Console.WriteLine(jsonData);
-                            jsonProductos.Add(jsonData); // Guardar el JSON en la lista
-                        }
+                        // Quedarse con el último para ese código:
+                        productosDict[codigo] = jsonData;
+
+                        // Si preferís el primero, usá:
+                        // if (!productosDict.ContainsKey(codigo))
+                        //     productosDict[codigo] = jsonData;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error al consultar la base de datos: {ex.Message}");
-            }
-            return jsonProductos;
+
+            var lista = new List<string>(productosDict.Values);
+            Console.WriteLine($"SB1_BOP -> códigos únicos: {lista.Count}");
+            return lista;
         }
         public class Procedimiento
         {
