@@ -34,6 +34,14 @@ namespace Web_Service // Note: actual namespace depends on the project name.
 
 
             await ProcesarBOP(connectionString);
+
+
+
+            //var estructurasMBOM = Tabla_SG1.pruebaBOP();
+            //Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+
+            //await Tabla_SG1.postSG1(estructurasMBOM);
+            //Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
         }
 
         public class TableBucket
@@ -53,48 +61,141 @@ namespace Web_Service // Note: actual namespace depends on the project name.
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO BOP ===");
 
-            string sqlQuery = @"WITH FirstProcessName AS (
-        SELECT RIGHT(p.catalogueId, 6) AS first_process_name
-        FROM Process p
-        INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-        INNER JOIN ProcessOccurrence po ON pr.id_Table = po.instancedRef
-        WHERE po.parentRef IS NULL
-    )
-    SELECT
-        fpn.first_process_name AS Process_codigo,          
+            string sqlQuery = @"WITH CTE_Hierarchy AS (
+    SELECT 
+        o.id_Table,
+        pr.name,
+        CASE WHEN LEFT(p.catalogueId, 2) = 'P-' 
+             THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2) 
+             ELSE p.catalogueId 
+        END AS catalogueId,
+        CAST(o.parentRef AS INT) AS parentRef,
+        pr.revision,
+        pr.subType,
+        o.idXml,
 
+        -- 👇 columnas alineadas con SB1
+        'PA' AS Tipo,
+        '01' AS Deposito,
         CASE 
-            WHEN LEFT(p.catalogueId, 1) IN ('M','E')
-                THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
-            WHEN RIGHT(p.catalogueId, 3) = '-FV'
-                THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
-            ELSE p.catalogueId
-        END AS PR_Codigo,
+            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
+            ELSE 'UN'
+        END AS unMedida
 
+    FROM ProcessOccurrence o
+    INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
+    INNER JOIN Process p          ON pr.masterRef   = p.id_Table
+    LEFT JOIN Form fUnidad
+           ON p.catalogueId = CASE
+                                WHEN CHARINDEX('/', fUnidad.name) > 0 
+                                     THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
+                                ELSE fUnidad.name
+                             END
+    LEFT JOIN UserValue_UserData uudUnidad
+           ON fUnidad.id_Table + 9 = uudUnidad.id_Father
+          AND p.idXml              = uudUnidad.idXml
+),
+
+CTE_Niveles AS (
+    -- Nivel 0 → nodos raíz
+    SELECT 
+        h.*,
+        0 AS Nivel
+    FROM CTE_Hierarchy h
+    WHERE h.parentRef IS NULL OR h.parentRef = 0
+
+    UNION ALL
+
+    -- Niveles siguientes (hijos)
+    SELECT 
+        h.*,
+        n.Nivel + 1
+    FROM CTE_Hierarchy h
+    INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
+)
+
+-- 🟢 PRIMERA PARTE: jerarquía
+SELECT
+    COALESCE(Parent.name, '')        AS Nombre_Padre,
+    COALESCE(Parent.catalogueId, '') AS Codigo_Padre,
+    Child.name                       AS Nombre_Hijo,
+    Child.catalogueId                AS Codigo_Hijo,
+    Child.subType                    AS Subtype_Hijo,
+    Child.revision                   AS Revision,
+    1                                AS CantidadHijo_Total,
+    nChild.Nivel                     AS Nivel,
+    Child.Tipo,
+    Child.Deposito,
+    Child.unMedida
+FROM CTE_Niveles nChild
+LEFT JOIN CTE_Niveles   nParent ON nChild.parentRef = nParent.id_Table
+LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
+LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
+
+UNION ALL
+
+-- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad
+SELECT 
+    Operation.name                      AS Nombre_Padre,
+    p2.catalogueId                      AS Codigo_Padre,
+    p.name                              AS Nombre_Hijo,
+    CASE WHEN LEFT(productId, 1) = 'E' 
+         THEN RIGHT(productId, LEN(productId) - 1) 
+         ELSE productId 
+    END                                 AS Codigo_Hijo,
+    pr.subType                          AS Subtype_Hijo,
+    pr.revision                         AS Revision,
+    COUNT(productId)                    AS CantidadHijo_Total,
+    3                                   AS Nivel,
+    'PA'                                AS Tipo,
+    '01'                                AS Deposito,
+    -- 👇 lógica de unidad de medida aplicada también acá
+    MAX(
         CASE 
-            WHEN LEFT(prod.productId, 1) IN ('M','E')
-                THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
-            WHEN RIGHT(prod.productId, 3) = '-FV'
-                THEN LEFT(prod.productId, LEN(prod.productId) - 3)
-            ELSE prod.productId
-        END AS Codigo,
+            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
+            ELSE 'UN'
+        END
+    )                                   AS unMedida
 
-        COUNT(prod.productId) AS Cantidad,
-        prod_rev.subType AS subType
-    FROM Process p
-    INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-    INNER JOIN ProcessOccurrence po ON po.instancedRef = pr.id_Table
-    INNER JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table
-    LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef
-    LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef
-    LEFT JOIN Occurrence o ON o.parentRef = po_op.id_Table
-       AND o.subType NOT IN ('MEWorkArea', 'METool')
-    LEFT JOIN ProductRevision prod_rev ON prod_rev.id_Table = o.instancedRef
-    LEFT JOIN Product prod ON prod.id_Table = prod_rev.masterRef
-    CROSS JOIN FirstProcessName fpn
-    WHERE prod.productId IS NOT NULL
-    GROUP BY fpn.first_process_name, p.catalogueId, prod.productId, prod_rev.subType
-    ORDER BY PR_Codigo DESC, Codigo;";
+FROM Occurrence
+INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
+INNER JOIN Product         p  ON p.id_Table  = pr.masterRef
+LEFT JOIN ProcessOccurrence o   ON Occurrence.parentRef = o.id_Table
+LEFT JOIN OperationRevision op  ON op.id_Table         = o.instancedRef
+LEFT JOIN Operation             ON Operation.id_Table  = op.masterRef
+LEFT JOIN ProcessOccurrence o2  ON o2.id_Table         = o.parentRef
+LEFT JOIN ProcessRevision pr2   ON o2.instancedRef     = pr2.id_Table
+LEFT JOIN Process p2            ON pr2.masterRef       = p2.id_Table
+
+-- 👇 joins para unidad de medida en la rama MEConsumed
+LEFT JOIN Form fUnidad2
+       ON p2.catalogueId = CASE
+                             WHEN CHARINDEX('/', fUnidad2.name) > 0 
+                                  THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
+                             ELSE fUnidad2.name
+                          END
+LEFT JOIN UserValue_UserData uudUnidad2
+       ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
+      AND p2.idXml              = uudUnidad2.idXml
+
+WHERE Occurrence.subType = 'MEConsumed'
+GROUP BY 
+    Operation.name,
+    p2.catalogueId,
+    p.name,
+    productId,
+    pr.subType,
+    pr.revision
+ORDER BY 
+    Nivel,
+    Codigo_Hijo DESC;
+";
 
             var converter = new SqlToJsonConverter(connectionString);
             XmlDocument xmlDoc = new XmlDocument();
@@ -137,24 +238,25 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                             CreateTable(connection, groupedDataRows);
                             InsertData(connection, groupedDataRows, archivo, contadorXmls);
 
-                            // SB1 (productos de la M-BOM)
-                            Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura MBOM...");
-                            var listaSB1_MBOM = Tabla_SB1.jsonSB1();
-                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
+                            // SB1 (productos de la BOP)
+                            Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
+                            var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
+                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
 
-                            foreach (string s in listaSB1_MBOM)
+                            foreach (string s in listaSB1_BOP)
                             {
                                 Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
                                 await Tabla_SB1.postSB1(s);
                             }
 
-                            // SG1 (estructuras de la M-BOM)
-                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
-                            var estructurasMBOM = Tabla_SG1.jsonSG1();
+                            // SG1 (estructuras de la BOP)
+                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
+                            var estructurasMBOM = Tabla_SG1.jsonSG1_BOP_Miercoles();
+                            Console.WriteLine(estructurasMBOM);
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
 
                             await Tabla_SG1.postSG1(estructurasMBOM);
-                            Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
+                            Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
 
 
 
@@ -261,7 +363,7 @@ namespace Web_Service // Note: actual namespace depends on the project name.
 
                             // --- ESTRUCTURAS TABLA SG1 
                             Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
-                            var estructurasMBOM = Tabla_SG1.jsonSG1();
+                            var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
 
                             await Tabla_SG1.postSG1(estructurasMBOM);
@@ -319,187 +421,6 @@ namespace Web_Service // Note: actual namespace depends on the project name.
             }
         }
 
-        //static Dictionary<string, string> Workarea(string connectionString) //Esto obtiene el workarea del proceso
-        //{
-        //    string sqlworkarea = @"SELECT
-        //                         guest.Process.catalogueId AS instancedProcess,
-        //                         guest.WorkArea.catalogueId AS instancedWorkArea        
-        //                         FROM
-        //                          guest.ProcessOccurrence
-        //                         CROSS APPLY (
-        //                          SELECT TRIM(value) AS FormID, ProcessOccurrence.id_Table
-        //                          FROM STRING_SPLIT(ProcessOccurrence.occurrenceRefs, ' ')
-        //                          WHERE value <> ''
-        //                         ) AS squary1
-        //                         JOIN guest.Occurrence AS occ ON TRY_CAST(SUBSTRING(squary1.FormID, 3, LEN(squary1.FormID)) AS INT) = Occ.parentRef and occ.idXml = ProcessOccurrence.idXml
-        //                         JOIN guest.ProcessRevision ON ProcessRevision.id_Table = ProcessOccurrence.instancedRef and ProcessRevision.idXml = ProcessOccurrence.idXml
-        //                         JOIN guest.Process ON ProcessRevision.masterRef = Process.id_Table and ProcessRevision.idXml = Process.idXml
-        //                         JOIN guest.WorkAreaRevision ON WorkAreaRevision.id_Table = occ.instancedRef and WorkAreaRevision.idXml = occ.idXml
-        //                         JOIN guest.WorkArea ON WorkAreaRevision.masterRef = WorkArea.id_Table and WorkAreaRevision.idXml = WorkArea.idXml
-        //                         WHERE
-        //                         occ.subType = 'MEWorkArea'
-        //                         AND ProcessOccurrence.id_Table = squary1.id_Table";
-
-        //    Dictionary<string, string> resultDictionary = new Dictionary<string, string>();
-
-        //    using (SqlConnection connection = new SqlConnection(connectionString))
-        //    {
-        //        try
-        //        {
-        //            connection.Open();
-
-        //            SqlCommand command = new SqlCommand(sqlworkarea, connection);
-        //            SqlDataReader reader = command.ExecuteReader();
-
-        //            while (reader.Read())
-        //            {
-        //                // Leer valores de las columnas
-        //                string instancedProcess = reader.GetString(0);
-        //                string instancedWorkArea = reader.GetString(1);
-
-        //                // Agregar al diccionario
-        //                resultDictionary[instancedProcess] = instancedWorkArea;
-        //            }
-
-        //            reader.Close();
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Utilidades.EscribirEnLog("Error en la consulta de WorkArea: " + ex.Message);
-        //        }
-        //    }
-
-        //    return resultDictionary;
-
-        //}
-        //static List<Dictionary<string, string>> MbomBop(string connectionString) //Relación MBOM-BOP con General Relation
-        //{
-        //    string sqlRelated = @"select distinct squary1.FormID, CAST(squary1.id_Table as INT),GeneralRelation.relatedRefs,case when ProductRevision.id_Table is not null then Product.productId
-        //                          when guest.ProductRevision.id_Table is null then Process.catalogueId end , GeneralRelation.idXml                                                                
-        //                          from
-        //                          guest.GeneralRelation
-        //                          cross apply (SELECT TRIM(value) AS FormID, GeneralRelation.id_Table
-        //                          FROM STRING_SPLIT(GeneralRelation.relatedRefs, ' ') WHERE value <> '') AS squary1
-        //                          LEFT JOIN guest.ProductRevision ON TRY_CAST(SUBSTRING(squary1.FormID, 4, LEN(squary1.FormID)) AS INT) = ProductRevision.id_Table and GeneralRelation.idXml = ProductRevision.idXml
-        //                          LEFT JOIN guest.ProcessRevision ON TRY_CAST(SUBSTRING(squary1.FormID, 4, LEN(squary1.FormID)) AS INT) = ProcessRevision.id_Table and GeneralRelation.idXml = ProcessRevision.idXml
-
-        //                          left join guest.Product on Product.id_Table = ProductRevision.masterRef and Product.idXml = ProductRevision.idXml
-        //                          left join guest.Process on Process.id_Table = ProcessRevision.masterRef and Process.idXml = ProcessRevision.idXml
-
-        //                          where GeneralRelation.id_Table = squary1.id_Table
-        //                          order by GeneralRelation.idXml ASC";
-        //    List<Dictionary<string, string>> listRelatedMbomBop = new List<Dictionary<string, string>>();
-
-        //    using (SqlConnection connection = new SqlConnection(connectionString))
-        //    {
-
-        //        connection.Open();
-        //        SqlCommand command3 = new SqlCommand(sqlRelated, connection);
-        //        SqlDataReader reader3 = command3.ExecuteReader();
-
-        //        try
-        //        {
-        //            int idtableAux = 0;
-        //            int idXmlAux = 0;
-        //            string codigoAux = string.Empty;
-
-        //            while (reader3.Read())
-        //            {
-        //                if (reader3.GetInt32(1) == idtableAux && reader3.GetInt32(4) == idXmlAux)
-        //                {
-        //                    string valCodigo = reader3.IsDBNull(3) ? string.Empty : reader3.GetString(3);
-
-        //                    Dictionary<string, string> diccionario1 = new Dictionary<string, string>
-        //                                        {
-        //                                            { valCodigo, codigoAux }
-        //                                        };
-        //                    listRelatedMbomBop.Add(diccionario1);
-
-        //                    codigoAux = string.Empty;
-        //                }
-        //                else
-        //                {
-        //                    codigoAux = reader3.IsDBNull(3) ? string.Empty : reader3.GetString(3);
-        //                }
-
-        //                idtableAux = reader3.GetInt32(1);
-        //                idXmlAux = reader3.GetInt32(4);
-        //            }
-        //        }
-        //        catch (Exception ea)
-        //        {
-        //            Utilidades.EscribirEnLog("Error en la consulta, related MBOM - BOP: " + ea.Message);
-        //        }
-        //        finally
-        //        {
-        //            command3.Cancel();
-        //            reader3.Close();
-        //            command3.Dispose();
-        //        }
-        //    }
-
-        //    return listRelatedMbomBop;
-        //}
-        //static void LimpiarCarpeta(string carpeta) //Limpia la carpeta donde se exportan todos los Xmls, uno por uno antes de volver a exportar más de otra estructura
-        //{
-        //    try
-        //    {
-
-
-        //        if (Directory.Exists(carpeta))
-        //        {
-        //            // Borra todos los archivos en la carpeta
-        //            string[] archivos = Directory.GetFiles(carpeta);
-        //            foreach (string archivo in archivos)
-        //            {
-        //                File.Delete(archivo);
-        //            }
-
-        //            Utilidades.EscribirEnLog($"Carpeta {carpeta} limpiada correctamente.");
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // Maneja cualquier excepción que pueda ocurrir durante la limpieza
-        //        Utilidades.EscribirEnLog($"Error al limpiar la carpeta: {ex.Message}");
-        //    }
-        //}  
-
-        // --------------------------------------------- Metodos utilizados por el Main() Carga en Base de datos de BOP ---------------------------------------------
-        //static void BorrarTabla(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows)
-        //{
-        //    foreach (var group in groupedDataRows)
-        //    {
-        //        try
-        //        {
-        //            string sql = @"
-        //                            DECLARE @sql NVARCHAR(MAX) = N'';
-
-        //                            SELECT @sql = STRING_AGG(
-        //                                    'DROP TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name),
-        //                                    '; '
-        //                                )
-        //                            FROM sys.tables t
-        //                            JOIN sys.schemas s ON s.schema_id = t.schema_id
-        //                            WHERE s.name = 'dbo';  -- Cambiar si usás otro esquema
-
-        //                            IF @sql IS NOT NULL AND @sql <> ''
-        //                                EXEC (@sql);";
-
-        //            using (var cmd = new SqlCommand(sql, connection))
-        //            {
-        //                cmd.ExecuteNonQuery();
-        //            }
-
-        //            Utilidades.EscribirEnLog("✔ Todas las tablas del esquema dbo fueron eliminadas correctamente.");
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Utilidades.EscribirEnLog($"❌ Error al intentar eliminar tablas: {ex.Message}");
-        //        }
-
-        //    }
-        //}
         static void BorrarTabla(SqlConnection connection, Dictionary<string, TableBucket> tables)
         {
             try
@@ -534,56 +455,7 @@ namespace Web_Service // Note: actual namespace depends on the project name.
             }
         }
 
-        //static bool ParseNode(XmlNode node, Dictionary<string, List<DataRow>> groupedDataRows, string parentNodeName = "")
-        //{
-        //    // Crear una lista de nombres de nodos a ignorar
-        //    var listaIgnorados = new List<string> { "ApplicationRef", "AttributeContext",
-        //                                                "ExternalFile", "Folder",
-        //                                                 "RevisionRule", "Site", "Transform", "View" };
-        //    try
-        //    {
-        //        if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
-        //        {
-        //            string nodeName = node.Name; //Nombre actual del nodo
-        //            Console.WriteLine($"Parseando nodo: {node.Name}");
-        //            DataRow dataRow = new DataRow(); //Nuevo objeto datarow
-        //            dataRow.NombreNodo = nodeName;
-
-
-        //            dataRow.Atributos = new List<string>();
-
-        //            foreach (XmlAttribute attribute in node.Attributes)
-        //            {
-        //                Console.WriteLine($"Agregando atributo:{ attribute.Name}");
-
-        //                dataRow.Atributos.Add(attribute.Name); //Guarda los nombres de los atributos
-        //            }
-
-        //            dataRow.XmlNode = node;
-        //            string tableName = GetTableName(nodeName, dataRow.Atributos, parentNodeName); //Creacion de nombre de la tabla
-        //            Console.WriteLine($"Creando tabla: { tableName }");
-        //            if (!groupedDataRows.ContainsKey(tableName))
-        //            {
-        //                groupedDataRows[tableName] = new List<DataRow>();
-        //            }
-        //            groupedDataRows[tableName].Add(dataRow);
-
-        //            foreach (XmlNode childNode in node.ChildNodes)
-        //            {
-        //                ParseNode(childNode, groupedDataRows, nodeName); //recursividad
-        //                Console.WriteLine($"Parseando nodo hijo: {node.Name}");
-        //            }
-        //            return true;
-        //        }
-        //        return false;
-        //    }
-        //    catch (Exception ea)
-        //    {
-        //        Utilidades.EscribirEnLog("Excepcion controlada en el metodo ParseNode: " + ea.Message);
-        //        return false;
-        //    }
-
-        //}
+        
         static bool ParseNode(XmlNode node, Dictionary<string, TableBucket> groupedDataRows, string parentNodeName = "")
         {
             var listaIgnorados = new List<string> {
@@ -597,7 +469,7 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                 if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
                 {
                     string nodeName = node.Name;
-                    Console.WriteLine($"Parseando nodo: {nodeName}");
+                    //Console.WriteLine($"Parseando nodo: {nodeName}");
 
                     // Obtener nombre de tabla
                     var atributosDelNodo = new List<string>();
@@ -629,7 +501,7 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                     // Recursividad
                     foreach (XmlNode childNode in node.ChildNodes)
                     {
-                        Console.WriteLine($"    -> Nodo hijo de {nodeName}: {childNode.Name}");
+                        //Console.WriteLine($"    -> Nodo hijo de {nodeName}: {childNode.Name}");
                         ParseNode(childNode, groupedDataRows, nodeName);
                     }
 

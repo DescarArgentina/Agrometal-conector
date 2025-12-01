@@ -180,7 +180,7 @@ namespace Web_Service
                     // Configurar el contenido de la solicitud
                     var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
 
-                    // Realizar la solicitud POST
+                    // Realizar la solicitud PUT
                     HttpResponseMessage response = await client.PutAsync(url, content);
 
                     // Leer el código de estado
@@ -201,8 +201,238 @@ namespace Web_Service
                 }
             }
         }
+        public static List<string> jsonSB1_BOP()
+        {
+            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+                                Integrated Security=True;TrustServerCertificate=True";
 
-        public static List<string> jsonSB1()
+            string query = @"
+WITH CTE_Hierarchy AS (
+    SELECT 
+        o.id_Table,
+        pr.name,
+        CASE WHEN LEFT(p.catalogueId, 2) = 'P-' 
+             THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2) 
+             ELSE p.catalogueId 
+        END AS catalogueId,
+        CAST(o.parentRef AS INT) AS parentRef,
+        pr.revision,
+        pr.subType,
+        o.idXml,
+
+        -- 👇 columnas alineadas con SB1
+        'PA' AS Tipo,
+        '01' AS Deposito,
+        CASE 
+            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
+            ELSE 'UN'
+        END AS unMedida
+
+    FROM ProcessOccurrence o
+    INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
+    INNER JOIN Process p          ON pr.masterRef   = p.id_Table
+    LEFT JOIN Form fUnidad
+           ON p.catalogueId = CASE
+                                WHEN CHARINDEX('/', fUnidad.name) > 0 
+                                     THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
+                                ELSE fUnidad.name
+                             END
+    LEFT JOIN UserValue_UserData uudUnidad
+           ON fUnidad.id_Table + 9 = uudUnidad.id_Father
+          AND p.idXml              = uudUnidad.idXml
+),
+
+CTE_Niveles AS (
+    -- Nivel 0 → nodos raíz
+    SELECT 
+        h.*,
+        0 AS Nivel
+    FROM CTE_Hierarchy h
+    WHERE h.parentRef IS NULL OR h.parentRef = 0
+
+    UNION ALL
+
+    -- Niveles siguientes (hijos)
+    SELECT 
+        h.*,
+        n.Nivel + 1
+    FROM CTE_Hierarchy h
+    INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
+)
+
+-- 🟢 PRIMERA PARTE: jerarquía
+SELECT
+    COALESCE(Parent.name, '')        AS Nombre_Padre,
+    COALESCE(Parent.catalogueId, '') AS Codigo_Padre,
+    Child.name                       AS Nombre_Hijo,
+    Child.catalogueId                AS Codigo_Hijo,
+    Child.subType                    AS Subtype_Hijo,
+    Child.revision                   AS Revision,
+    1                                AS CantidadHijo_Total,
+    nChild.Nivel                     AS Nivel,
+    Child.Tipo,
+    Child.Deposito,
+    Child.unMedida
+FROM CTE_Niveles nChild
+LEFT JOIN CTE_Niveles   nParent ON nChild.parentRef = nParent.id_Table
+LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
+LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
+
+UNION ALL
+
+-- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad
+SELECT 
+    Operation.name                      AS Nombre_Padre,
+    p2.catalogueId                      AS Codigo_Padre,
+    p.name                              AS Nombre_Hijo,
+    CASE WHEN LEFT(productId, 1) = 'E' 
+         THEN RIGHT(productId, LEN(productId) - 1) 
+         ELSE productId 
+    END                                 AS Codigo_Hijo,
+    pr.subType                          AS Subtype_Hijo,
+    pr.revision                         AS Revision,
+    COUNT(productId)                    AS CantidadHijo_Total,
+    3                                   AS Nivel,
+    'PA'                                AS Tipo,
+    '01'                                AS Deposito,
+    -- 👇 lógica de unidad de medida aplicada también acá
+    MAX(
+        CASE 
+            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
+            ELSE 'UN'
+        END
+    )                                   AS unMedida
+
+FROM Occurrence
+INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
+INNER JOIN Product         p  ON p.id_Table  = pr.masterRef
+LEFT JOIN ProcessOccurrence o   ON Occurrence.parentRef = o.id_Table
+LEFT JOIN OperationRevision op  ON op.id_Table         = o.instancedRef
+LEFT JOIN Operation             ON Operation.id_Table  = op.masterRef
+LEFT JOIN ProcessOccurrence o2  ON o2.id_Table         = o.parentRef
+LEFT JOIN ProcessRevision pr2   ON o2.instancedRef     = pr2.id_Table
+LEFT JOIN Process p2            ON pr2.masterRef       = p2.id_Table
+
+-- 👇 joins para unidad de medida en la rama MEConsumed
+LEFT JOIN Form fUnidad2
+       ON p2.catalogueId = CASE
+                             WHEN CHARINDEX('/', fUnidad2.name) > 0 
+                                  THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
+                             ELSE fUnidad2.name
+                          END
+LEFT JOIN UserValue_UserData uudUnidad2
+       ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
+      AND p2.idXml              = uudUnidad2.idXml
+
+WHERE Occurrence.subType = 'MEConsumed'
+GROUP BY 
+    Operation.name,
+    p2.catalogueId,
+    p.name,
+    productId,
+    pr.subType,
+    pr.revision
+ORDER BY 
+    Nivel,
+    Codigo_Hijo DESC;
+    ";
+
+            // 🔑 Diccionario para deduplicar por código
+            var productosDict = new Dictionary<string, string>(); // codigo -> jsonData
+            int totalFilasSql = 0;
+
+            try
+            {
+                using (SqlConnection connection = new SqlConnection(connectionString))
+                {
+                    connection.Open();
+
+                    using (SqlCommand command = new SqlCommand(query, connection))
+                    {
+                        command.CommandTimeout = 120;
+
+                        using (SqlDataReader reader = command.ExecuteReader())
+                        {
+                            
+                            while (reader.Read())
+                            {
+                                totalFilasSql++;
+
+                                string codigo = reader["Codigo_Hijo"].ToString();
+                                string descripcion = reader["Nombre_Hijo"].ToString();
+                                string tipo = reader["Tipo"].ToString();
+                                string deposito = reader["Deposito"].ToString();
+                                string unMedida = reader["unMedida"].ToString();
+                                string revision = reader["Revision"].ToString();
+
+                                Console.WriteLine(
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | dep={deposito} | UM={unMedida} | rev={revision}"
+                                );
+
+                                var producto = new
+                                {
+                                    producto = new List<Dictionary<string, string>>
+        {
+            new() { { "campo", "codigo"      }, { "valor", codigo      } },
+            new() { { "campo", "descripcion" }, { "valor", descripcion } },
+            new() { { "campo", "tipo"        }, { "valor", tipo        } },
+            new() { { "campo", "deposito"    }, { "valor", deposito    } },
+            new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
+            new() { { "campo", "revEstruct"  }, { "valor", revision    } },
+        }
+                                };
+
+                                string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
+
+                                // log de deduplicación
+                                if (productosDict.ContainsKey(codigo))
+                                {
+                                    Console.WriteLine($"[SB1] Código {codigo} ya existía, se reemplaza el JSON anterior por el nuevo.");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[SB1] Nuevo código agregado al diccionario: {codigo}");
+                                }
+
+                                productosDict[codigo] = jsonData;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al consultar la base de datos: {ex.Message}");
+            }
+
+            //var jsonProductos = new List<string>();
+            //foreach (var kvp in productosDict)
+            //{
+            //    Console.WriteLine("-- sb1 unico --");
+            //    Console.WriteLine(kvp.Value);
+            //    jsonProductos.Add(kvp.Value);
+            //}
+
+            //Console.WriteLine($"SB1 -> filas SQL: {totalFilasSql}, códigos únicos: {productosDict.Count}");
+            var jsonProductos = new List<string>();
+            foreach (var kvp in productosDict)
+            {
+                Console.WriteLine("-- sb1 unico --");
+                Console.WriteLine($"[SB1 JSON FINAL] codigo={kvp.Key}");
+                Console.WriteLine(kvp.Value);
+                jsonProductos.Add(kvp.Value);
+            }
+
+            Console.WriteLine($"SB1 -> filas SQL totales: {totalFilasSql}, códigos únicos: {productosDict.Count}");
+            return jsonProductos;
+        }
+        public static List<string> jsonSB1_MBOM()
         {
             string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
                                 Integrated Security=True;TrustServerCertificate=True";
@@ -239,8 +469,8 @@ SELECT DISTINCT
     Child.revision                         AS Revision,
 
     /* ===== NUEVOS CAMPOS ALINEADOS CON SB1 ===== */
-    MIN('PA')                              AS Tipo,              -- mismo valor que SB1
-    MIN('01')                              AS Deposito,          -- mismo valor que SB1
+    MIN('PA')                              AS tipo,              -- mismo valor que SB1
+    MIN('01')                              AS deposito,          -- mismo valor que SB1
     MAX(
         CASE 
             WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
@@ -466,8 +696,8 @@ ORDER BY
 
                                 string codigo = reader["Codigo_Hijo"].ToString();
                                 string descripcion = reader["Nombre_Hijo"].ToString();
-                                string tipo = reader["Tipo"].ToString();
-                                string deposito = reader["Deposito"].ToString();
+                                string tipo = reader["tipo"].ToString();
+                                string deposito = reader["deposito"].ToString();
                                 string unMedida = reader["unMedida"].ToString();
                                 string revision = reader["Revision"].ToString();
 
