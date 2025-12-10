@@ -25,12 +25,15 @@
     public class SqlRecord
     {
         public string Process_codigo { get; set; }
-        public string PRCodigo { get; set; }
+        public string PR_Codigo { get; set; }
         public string Codigo { get; set; }
         public double Cantidad { get; set; }
-        public string Subtype { get; set; }  // <-- nuevo campo
+        public string Subtype { get; set; }
 
-        public string Nombre_WA { get; set; }
+        public string WorkAreaId { get; set; }   // wa.catalogueId (000465, etc.)
+        public string Nombre_WA { get; set; }    // wa.nombre si lo traés
+
+        public int NumBusqueda { get; set; }
     }
 
     public class SqlToJsonConverter
@@ -41,12 +44,11 @@
         {
             this.connectionString = connectionString;
         }
-
         public List<ProductStructure> ConvertSqlToHierarchicalJsons(string sqlQuery)
         {
             var records = new List<SqlRecord>();
 
-            // 1) Leer la consulta
+            // 1) Leer la consulta SQL
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
@@ -58,10 +60,13 @@
                         records.Add(new SqlRecord
                         {
                             Process_codigo = rdr["Process_codigo"].ToString(),
-                            PRCodigo = rdr["PR_Codigo"].ToString(),
+                            PR_Codigo = rdr["PR_Codigo"].ToString(),
                             Codigo = rdr["Codigo"].ToString(),
                             Cantidad = Convert.ToDouble(rdr["Cantidad"]),
-                            Subtype = rdr["subType"].ToString()
+                            Subtype = rdr["subType"].ToString(),
+                            NumBusqueda = int.TryParse(rdr["num_busqueda"]?.ToString(), out var nb) ? nb : 0,
+                            WorkAreaId = rdr["WorkArea_CatalogueId"]?.ToString(),
+                            Nombre_WA = rdr["WorkArea_Nombre"]?.ToString()
                         });
                     }
                 }
@@ -70,23 +75,54 @@
             if (!records.Any())
                 return new List<ProductStructure>();
 
-            // 2) Obtener root (ej: 022116) desde Process_codigo
+            // Helper: detectar WorkArea de Terceros
+            bool EsWorkAreaTerceros(SqlRecord r)
+            {
+                var id = (r.WorkAreaId ?? string.Empty).Trim();
+                var nom = (r.Nombre_WA ?? string.Empty).Trim();
+
+                return id == "000465" ||
+                       nom.Equals("Terceros", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // 2) Root (ej: 022780) desde Process_codigo
             var match = Regex.Match(records[0].Process_codigo ?? string.Empty, @"\d+");
             string rootParent = match.Success ? match.Value : records[0].Process_codigo;
 
-            // 3) Lista de PRs distintos, en orden descendente (como ya viene la consulta)
-            var prList = records
-                .Select(r => r.PRCodigo)
-                .Where(c => !string.IsNullOrWhiteSpace(c))
-                .Distinct()
-                .OrderByDescending(c => c)  // o simplemente .ToList() si ya viene en orden
+            // 3) Agrupar PRs con info de NumBusqueda y flag de Terceros
+            var prGroups = records
+                .Where(r => !string.IsNullOrWhiteSpace(r.PR_Codigo))
+                .GroupBy(r => r.PR_Codigo)
+                .Select(g => new
+                {
+                    PR = g.Key,
+                    NumBusqueda = g.Max(r => r.NumBusqueda),
+                    EsTerceros = g.Any(EsWorkAreaTerceros)
+                })
                 .ToList();
 
-            // 4) Diccionario de ProductStructure por código
+            // Orden híbrido: num_busqueda (si hay) y luego código
+            var prMetaOrdenado = prGroups
+                .OrderByDescending(x => x.NumBusqueda > 0)
+                .ThenByDescending(x => x.NumBusqueda)
+                .ThenBy(x => x.PR)
+                .ToList();
+
+            var prList = prMetaOrdenado.Select(x => x.PR).ToList();
+
+            var esTercerosPorPR = prMetaOrdenado.ToDictionary(
+                x => x.PR,
+                x => x.EsTerceros,
+                StringComparer.OrdinalIgnoreCase);
+
+            // 4) Diccionario de estructuras
             var map = new Dictionary<string, ProductStructure>(StringComparer.OrdinalIgnoreCase);
 
             ProductStructure GetOrCreate(string codigo)
             {
+                if (string.IsNullOrWhiteSpace(codigo))
+                    throw new ArgumentException("codigo no puede ser nulo o vacío", nameof(codigo));
+
                 if (!map.TryGetValue(codigo, out var ps))
                 {
                     ps = new ProductStructure
@@ -100,50 +136,158 @@
                 return ps;
             }
 
-            // 5) Construir la cadena: root → PR1 → PR2 → PR3
-            //    y garantizar que cada PR tenga su ProductStructure vacío
-            var rootPs = GetOrCreate(rootParent);
+            // 5) Calcular padre de cada PR
+            var parentByPr = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string lastNonTerceros = null;
 
-            for (int i = 0; i < prList.Count; i++)
+            foreach (var meta in prMetaOrdenado)
             {
-                string prCode = prList[i];
-                string parent = (i == 0) ? rootParent : prList[i - 1];
+                string pr = meta.PR;
+                bool esTerceros = meta.EsTerceros;
+                string parent;
+
+                if (!esTerceros)
+                {
+                    parent = lastNonTerceros ?? rootParent;
+                    lastNonTerceros = pr;
+                }
+                else
+                {
+                    if (lastNonTerceros != null &&
+                        parentByPr.TryGetValue(lastNonTerceros, out var parentLast))
+                    {
+                        parent = parentLast;    // hermano del último PR normal
+                    }
+                    else
+                    {
+                        parent = rootParent;    // si es el primero y ya es de terceros
+                    }
+                }
+
+                parentByPr[pr] = parent;
+            }
+
+            // 6) Construir lista de hijos por padre
+            var childrenByParent = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var meta in prMetaOrdenado)
+            {
+                string pr = meta.PR;
+                string parent = parentByPr[pr];
+
+                if (!childrenByParent.TryGetValue(parent, out var list))
+                {
+                    list = new List<string>();
+                    childrenByParent[parent] = list;
+                }
+                list.Add(pr);  // ya viene en orden híbrido
+            }
+
+            // Crear root
+            GetOrCreate(rootParent);
+
+            // 7) Crear esqueleto de PRs respetando orden
+            foreach (var kvp in childrenByParent)
+            {
+                string parent = kvp.Key;
+                var hijos = kvp.Value;
 
                 var psParent = GetOrCreate(parent);
 
-                // Agregamos el PR como hijo del padre (root o PR anterior)
-                psParent.estructura.Add(new List<Campo>
-        {
-            new Campo { campo = "codigo",   valor = prCode },
-            new Campo { campo = "cantidad", valor = "1" }  // PR como intermedio, cantidad 1
-        });
+                var hijosNormales = hijos
+                    .Where(h => !esTercerosPorPR[h])
+                    .ToList();
 
-                // Aseguramos que el PR exista en el map (para luego colgarle consumibles)
-                GetOrCreate(prCode);
+                var hijosTerceros = hijos
+                    .Where(h => esTercerosPorPR[h])
+                    .ToList();
+
+                // Primero PR normales
+                foreach (var child in hijosNormales)
+                {
+                    psParent.estructura.Add(new List<Campo>
+            {
+                new Campo { campo = "codigo",   valor = child },
+                new Campo { campo = "cantidad", valor = "1" }
+            });
+
+                    GetOrCreate(child);
+                }
+
+                // Luego PR de Terceros
+                foreach (var child in hijosTerceros)
+                {
+                    psParent.estructura.Add(new List<Campo>
+            {
+                new Campo { campo = "codigo",   valor = child },
+                new Campo { campo = "cantidad", valor = "1" }
+            });
+
+                    GetOrCreate(child);
+                }
             }
 
-            // 6) Agregar los consumibles a cada PR según PR_Codigo
+            // 8) Consumibles de cada PR (ignorando PR de Terceros)
             foreach (var rec in records)
             {
-                // Si por alguna razón el hijo tiene subtype de operación/herramental, podés filtrarlo aquí:
                 var st = (rec.Subtype ?? string.Empty).ToLowerInvariant();
                 if (st.Contains("operation") || st.Contains("meoperation") ||
                     st.Contains("fixture") || st.Contains("tool"))
                 {
-                    continue; // lo excluimos
+                    continue;
                 }
 
-                var psParent = GetOrCreate(rec.PRCodigo);
+                if (string.IsNullOrWhiteSpace(rec.PR_Codigo))
+                    continue;
+
+                // Si es PR de Terceros, no cuelgo consumibles
+                if (esTercerosPorPR.TryGetValue(rec.PR_Codigo, out var esTer) && esTer)
+                    continue;
+
+                var codigoHijo = (rec.Codigo ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(codigoHijo))
+                    continue;
+
+                if (rec.Cantidad <= 0)
+                    continue;
+
+                var psParent = GetOrCreate(rec.PR_Codigo);
 
                 psParent.estructura.Add(new List<Campo>
         {
-            new Campo { campo = "codigo",   valor = rec.Codigo },
+            new Campo { campo = "codigo",   valor = codigoHijo },
             new Campo { campo = "cantidad", valor = rec.Cantidad.ToString(CultureInfo.InvariantCulture) }
         });
             }
 
-            // 7) Armar la lista final de ProductStructure:
-            //    primero root, luego PRs en el orden deseado.
+            // 9) NUEVO: agregar PRxxxxxxT como hijo SV de cada PR NO Terceros
+            foreach (var pr in prList)
+            {
+                if (esTercerosPorPR.TryGetValue(pr, out var esTer) && esTer)
+                    continue; // no se generan T para Terceros
+
+                var psParent = GetOrCreate(pr);
+                string codigoServ = pr + "T";
+
+                // Evitar duplicados si por alguna razón ya estuviera
+                bool yaExiste = psParent.estructura.Any(rel =>
+                {
+                    var c = rel.FirstOrDefault(x => x.campo == "codigo");
+                    return c != null &&
+                           string.Equals(c.valor, codigoServ, StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (!yaExiste)
+                {
+                    psParent.estructura.Add(new List<Campo>
+            {
+                new Campo { campo = "codigo",   valor = codigoServ },
+                new Campo { campo = "cantidad", valor = "1" }
+            });
+                }
+            }
+
+            // 10) Lista final: root primero, luego PRs en orden
             var result = new List<ProductStructure>();
 
             if (map.ContainsKey(rootParent))
@@ -157,6 +301,10 @@
 
             return result;
         }
+
+
+
+
 
 
         public List<string> ConvertToHierarchicalJsonStrings(string sqlQuery)
@@ -202,15 +350,15 @@
                 // Cada relacion es una lista de Campos
                 var childCode = relacion.First(c => c.campo == "codigo").valor;
 
-                Console.WriteLine($"{indent}  ├─ {childCode}");
+                Console.WriteLine($"{indent}  +- {childCode}");
 
-                // Si ese hijo también es padre → imprimimos recursivamente
+                // Si ese hijo también es padre ? imprimimos recursivamente
                 if (map.ContainsKey(childCode))
-                    PrintProductStructure(childCode, map, indent + "  │   ", visited);
+                    PrintProductStructure(childCode, map, indent + "  ¦   ", visited);
             }
         }
 
-       
+
 
         // Método para guardar cada JSON en archivos separados con nombres descriptivos
         public void SaveHierarchicalJsonFiles(string sqlQuery, string basePath = "")
@@ -253,7 +401,7 @@
             }
         }
 
-       
+
 
         // Método para procesar y mostrar cada JSON individual
         public void ProcessHierarchicalJsons(string sqlQuery)

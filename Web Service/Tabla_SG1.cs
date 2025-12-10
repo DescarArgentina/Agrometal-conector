@@ -247,305 +247,272 @@ namespace Web_Service
 
             return (codigo, estructura);
         }
-        public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP_Miercoles()
+        public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP()
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                      Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                    Integrated Security=True;TrustServerCertificate=True";
 
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
+            //            string query = @"WITH FirstProcessName AS (
+            //    SELECT RIGHT(p.catalogueId, 6) AS first_process_name
+            //    FROM Process p
+            //    INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
+            //    INNER JOIN ProcessOccurrence po ON pr.id_Table = po.instancedRef
+            //    LEFT JOIN UserValue_UserData uud2 
+            //        ON uud2.id_Father = po.id_Table + 2 
+            //       AND uud2.title = 'SequenceNumber'
+            //    WHERE po.parentRef IS NULL
+            //)
+            //SELECT
+            //    fpn.first_process_name AS Process_codigo,
+
+            //    -- Código del PR
+            //    CASE 
+            //        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            //            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+            //        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            //            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+            //        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            //            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+            //        ELSE p.catalogueId
+            //    END AS PR_Codigo,
+
+            //    -- Código del componente (producto hijo)
+            //    CASE 
+            //        WHEN LEFT(prod.productId, 1) IN ('M','E')
+            //            THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
+            //        WHEN RIGHT(prod.productId, 3) = '-FV'
+            //            THEN LEFT(prod.productId, LEN(prod.productId) - 3)
+            //        ELSE prod.productId
+            //    END AS Codigo,
+
+            //    COUNT(prod.productId) AS Cantidad,
+            //    prod_rev.subType      AS subType,
+            //    uud2.value            AS num_busqueda,
+
+            //    -- Datos de WorkArea asociados al PR
+            //    wa.catalogueId        AS WorkArea_CatalogueId,
+            //	wa.name				  AS WorkArea_Nombre,
+            //    war.revision          AS WorkArea_Revision
+
+            //FROM Process p
+            //INNER JOIN ProcessRevision pr 
+            //        ON pr.masterRef = p.id_Table
+            //INNER JOIN ProcessOccurrence po 
+            //        ON po.instancedRef = pr.id_Table    -- occurrence del PR
+
+            //-- >>> WorkArea: hijo del PR <<<
+            //LEFT JOIN Occurrence o_wa
+            //       ON o_wa.parentRef = po.id_Table
+            //      AND o_wa.subType = 'MEWorkarea'      -- hijo del PR
+            //LEFT JOIN WorkAreaRevision war
+            //       ON war.id_Table = o_wa.instancedRef
+            //LEFT JOIN WorkArea wa
+            //       ON wa.id_Table = war.masterRef
+
+            //-- >>> Operaciones: hijas del PR <<<
+            //INNER JOIN ProcessOccurrence po_op 
+            //        ON po_op.parentRef = po.id_Table    -- occurrence de la operación
+
+            //-- SequenceNumber (num_busqueda) del PR
+            //LEFT JOIN UserValue_UserData uud2 
+            //       ON uud2.id_Father = po.id_Table + 2 
+            //      AND uud2.title = 'SequenceNumber'
+
+            //-- >>> Componentes (productos) hijos de la operación <<<
+            //LEFT JOIN OperationRevision op_rev 
+            //       ON op_rev.id_Table = po_op.instancedRef
+            //LEFT JOIN Operation op 
+            //       ON op.id_Table = op_rev.masterRef
+            //LEFT JOIN Occurrence o 
+            //       ON o.parentRef = po_op.id_Table
+            //      AND o.subType NOT IN ('METool')   -- podés agregar aquí MEWorkarea/MELine si hiciera falta
+            //LEFT JOIN ProductRevision prod_rev 
+            //       ON prod_rev.id_Table = o.instancedRef
+            //LEFT JOIN Product prod 
+            //       ON prod.id_Table = prod_rev.masterRef
+
+            //CROSS JOIN FirstProcessName fpn
+
+            //WHERE 
+            //    fpn.first_process_name <>
+            //    CASE 
+            //        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            //            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+            //        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            //            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+            //        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            //            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+            //        ELSE p.catalogueId
+            //    END
+
+            //GROUP BY 
+            //    fpn.first_process_name,
+            //    p.catalogueId,
+            //    prod.productId,
+            //    prod_rev.subType,
+            //    uud2.value,
+            //    wa.catalogueId,
+            //	wa.name,
+            //    war.revision
+
+            //ORDER BY 
+            //    num_busqueda DESC,
+            //    LEFT(p.catalogueId, 3) DESC;
+            //";
             string query = @"WITH FirstProcessName AS (
-        SELECT RIGHT(p.catalogueId, 6) AS first_process_name
-        FROM Process p
-        INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-        INNER JOIN ProcessOccurrence po ON pr.id_Table = po.instancedRef
-        WHERE po.parentRef IS NULL
-    )
-    SELECT
-        fpn.first_process_name AS Process_codigo,          
-
-        CASE 
-            WHEN LEFT(p.catalogueId, 1) IN ('M','E')
-                THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
-            WHEN RIGHT(p.catalogueId, 3) = '-FV'
-                THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
-            ELSE p.catalogueId
-        END AS PR_Codigo,
-
-        CASE 
-            WHEN LEFT(prod.productId, 1) IN ('M','E')
-                THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
-            WHEN RIGHT(prod.productId, 3) = '-FV'
-                THEN LEFT(prod.productId, LEN(prod.productId) - 3)
-            ELSE prod.productId
-        END AS Codigo,
-
-        COUNT(prod.productId) AS Cantidad,
-        prod_rev.subType AS subType
+    SELECT RIGHT(p.catalogueId, 6) AS first_process_name
     FROM Process p
     INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-    INNER JOIN ProcessOccurrence po ON po.instancedRef = pr.id_Table
-    INNER JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table
-    LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef
-    LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef
-    LEFT JOIN Occurrence o ON o.parentRef = po_op.id_Table
-       AND o.subType NOT IN ('MEWorkArea', 'METool')
-    LEFT JOIN ProductRevision prod_rev ON prod_rev.id_Table = o.instancedRef
-    LEFT JOIN Product prod ON prod.id_Table = prod_rev.masterRef
-    CROSS JOIN FirstProcessName fpn
-    WHERE prod.productId IS NOT NULL
-    GROUP BY fpn.first_process_name, p.catalogueId, prod.productId, prod_rev.subType
-    ORDER BY PR_Codigo DESC, Codigo;
+    INNER JOIN ProcessOccurrence po ON pr.id_Table = po.instancedRef
+    LEFT JOIN UserValue_UserData uud2 
+        ON uud2.id_Father = po.id_Table + 2 
+       AND uud2.title = 'SequenceNumber'
+    WHERE po.parentRef IS NULL
+)
+SELECT
+    fpn.first_process_name AS Process_codigo,
+
+    -- Código del PR
+    CASE 
+        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+        ELSE p.catalogueId
+    END AS PR_Codigo,
+
+    -- Código del componente (producto hijo)
+    CASE 
+        WHEN LEFT(prod.productId, 1) IN ('M','E')
+            THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
+        WHEN RIGHT(prod.productId, 3) = '-FV'
+            THEN LEFT(prod.productId, LEN(prod.productId) - 3)
+        ELSE prod.productId
+    END AS Codigo,
+
+    -- 👇 sigue siendo conteo de ocurrencias
+    COUNT(prod.productId) AS Cantidad,
+
+    prod_rev.subType      AS subType,
+    uud2.value            AS num_busqueda,
+
+    -- Datos de WorkArea asociados al PR
+    wa.catalogueId        AS WorkArea_CatalogueId,
+    wa.name               AS WorkArea_Nombre,
+    war.revision          AS WorkArea_Revision
+
+FROM Process p
+INNER JOIN ProcessRevision pr 
+        ON pr.masterRef = p.id_Table
+INNER JOIN ProcessOccurrence po 
+        ON po.instancedRef = pr.id_Table    -- occurrence del PR
+
+-- >>> WorkArea: hijo del PR <<<
+LEFT JOIN Occurrence o_wa
+       ON o_wa.parentRef = po.id_Table
+      AND o_wa.subType = 'MEWorkarea'      -- hijo del PR
+LEFT JOIN WorkAreaRevision war
+       ON war.id_Table = o_wa.instancedRef
+LEFT JOIN WorkArea wa
+       ON wa.id_Table = war.masterRef
+
+-- >>> Operaciones: hijas del PR <<<
+INNER JOIN ProcessOccurrence po_op 
+        ON po_op.parentRef = po.id_Table    -- occurrence de la operación
+
+-- SequenceNumber (num_busqueda) del PR
+LEFT JOIN UserValue_UserData uud2 
+       ON uud2.id_Father = po.id_Table + 2 
+      AND uud2.title = 'SequenceNumber'
+
+-- >>> Componentes (productos) hijos de la operación <<<
+LEFT JOIN OperationRevision op_rev 
+       ON op_rev.id_Table = po_op.instancedRef
+LEFT JOIN Operation op 
+       ON op.id_Table = op_rev.masterRef
+LEFT JOIN Occurrence o 
+       ON o.parentRef = po_op.id_Table
+      AND o.subType NOT IN ('METool')   -- podés agregar aquí MEWorkarea/MELine si hiciera falta
+LEFT JOIN ProductRevision prod_rev 
+       ON prod_rev.id_Table = o.instancedRef
+LEFT JOIN Product prod 
+       ON prod.id_Table = prod_rev.masterRef
+
+-- 👇 NUEVO: Quantity del componente
+LEFT JOIN UserValue_UserData uv_qty
+       ON uv_qty.id_Father = o.id_Table + 2
+      AND uv_qty.title = 'Quantity'
+      -- si tenés idXml en ambas tablas, podés reforzar:
+      -- AND uv_qty.idXml = o.idXml
+
+CROSS JOIN FirstProcessName fpn
+
+WHERE 
+    -- excluimos el propio PR raíz
+    fpn.first_process_name <>
+    CASE 
+        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+        ELSE p.catalogueId
+    END
+    -- ⛔ NUEVO: NO incluir reps comprados / materias primas con Quantity vacío o NULL
+    AND NOT (
+        prod_rev.subType IN ('Agm4_RepCompradoRevision', 'Agm4_MatPrimaRevision')
+        AND (
+            uv_qty.value IS NULL 
+            OR LTRIM(RTRIM(uv_qty.value)) = ''
+        )
+    )
+     AND prod_rev.subType NOT IN ('MfgMEFactoryToolRevision', 'Mfg0MEFactoryToolRevision')
+
+GROUP BY 
+    fpn.first_process_name,
+    p.catalogueId,
+    prod.productId,
+    prod_rev.subType,
+    uud2.value,
+    wa.catalogueId,
+    wa.name,
+    war.revision
+
+ORDER BY 
+    num_busqueda DESC,
+    LEFT(p.catalogueId, 3) DESC;
 ";
+            var converter = new SqlToJsonConverter(connectionString);
+            var products = converter.ConvertSqlToHierarchicalJsons(query);
 
+            var estructuras =
+                new Dictionary<string, List<List<Dictionary<string, string>>>>();
 
-
-            Dictionary<string, List<List<Dictionary<string, string>>>> estructuras = new Dictionary<string, List<List<Dictionary<string, string>>>>();
-            try
+            foreach (var product in products)
             {
-                using (SqlConnection connection = new SqlConnection(connectionString))
+                var listaHijos = new List<List<Dictionary<string, string>>>();
+
+                foreach (var relacion in product.estructura)
                 {
-                    connection.Open();
+                    var codigo = relacion.First(c => c.campo == "codigo").valor;
+                    var cantidad = relacion.First(c => c.campo == "cantidad").valor;
 
-                    using (SqlCommand command = new SqlCommand(query, connection))
-                    {
-                        command.CommandTimeout = 5000;
-                        using (SqlDataReader reader = command.ExecuteReader())
-                        {
-                            Dictionary<string, List<DataModel>> dataByParent = new Dictionary<string, List<DataModel>>();
-
-                            // Primero, agrupamos todos los datos por ParentCodigo para procesarlos juntos
-                            while (reader.Read())
-                            {
-
-
-                                string parentName = reader["Nombre_Padre"]?.ToString() ?? string.Empty;
-                                string? parentCodigo = reader["Codigo_Padre"]?.ToString();
-                                string childName = reader["Nombre_Hijo"]?.ToString() ?? string.Empty;
-                                string childCodigo = reader["Codigo_Hijo"]?.ToString() ?? string.Empty;
-                                Console.WriteLine("Este es el codigo que va al json: " + childCodigo);
-                                string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
-
-                                if (string.IsNullOrEmpty(parentCodigo))
-                                {
-                                    Console.WriteLine("WARNING: Skipping record with null or empty ParentCodigo");
-                                    continue;  // Skip this record
-                                }
-
-                                var model = new DataModel
-                                {
-                                    ParentName = parentName,
-                                    ParentCodigo = parentCodigo,
-                                    ChildName = childName,
-                                    ChildCodigo = childCodigo,
-                                    CantidadHijo = cantidadHijo,
-                                    //Variante = reader.IsDBNull(reader.GetOrdinal("Variante")) ?
-                                    //string.Empty : reader["Variante"].ToString()
-                                };
-
-                                poblarBaseSG1(parentName, parentCodigo, childName, childCodigo, cantidadHijo);
-                                if (!dataByParent.ContainsKey(model.ParentCodigo))
-                                {
-                                    dataByParent[model.ParentCodigo] = new List<DataModel>();
-                                }
-
-                                dataByParent[model.ParentCodigo].Add(model);
-                            }
-
-                            // Ahora procesamos cada grupo
-                            foreach (var parentGroup in dataByParent)
-                            {
-                                string parentCodigo = parentGroup.Key;
-                                List<DataModel> children = parentGroup.Value;
-
-                                // Skip if parentCodigo is null or empty (should not happen at this point, but just in case)
-                                if (string.IsNullOrEmpty(parentCodigo))
-                                {
-                                    Console.WriteLine("WARNING: Skipping group with null or empty ParentCodigo");
-                                    continue;
-                                }
-
-                                if (!estructuras.ContainsKey(parentCodigo))
-                                {
-                                    estructuras[parentCodigo] = new List<List<Dictionary<string, string>>>();
-                                }
-
-                                // Analizamos las condiciones de todos los hijos
-                                var allConditions = new Dictionary<string, List<string>>();
-
-                                foreach (var child in children)
-                                {
-                                    if (!string.IsNullOrEmpty(child.Variante))
-                                    {
-                                        try
-                                        {
-                                            var conditions = ExtractAllConditions(child.Variante);
-                                            foreach (var condition in conditions)
-                                            {
-                                                if (condition.Key == null)
-                                                {
-                                                    Console.WriteLine($"WARNING: Null key found in conditions for Variante: {child.Variante}");
-                                                    continue;
-                                                }
-
-                                                if (!allConditions.ContainsKey(condition.Key))
-                                                {
-                                                    allConditions[condition.Key] = new List<string>();
-                                                }
-
-                                                if (!allConditions[condition.Key].Contains(condition.Value))
-                                                {
-                                                    allConditions[condition.Key].Add(condition.Value);
-                                                }
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine($"Error processing Variante '{child.Variante}': {ex.Message}");
-                                        }
-                                    }
-                                }
-
-                                // Rest of processing with proper null checking...
-                                // (Remaining code follows the same pattern - ensuring no null keys are used)
-
-                                // Process each child and add the relevant conditions
-                                var configCounter = new Dictionary<string, int>();
-
-                                foreach (var child in children)
-                                {
-                                    var childStructure = new List<Dictionary<string, string>>
-                                    {
-                                        new Dictionary<string, string> { { "campo", "codigo" }, { "valor", child.ChildCodigo } },
-                                        new Dictionary<string, string> { { "campo", "cantidad" }, { "valor", child.CantidadHijo } }
-                                    };
-
-                                    // If variant is empty, no additional fields needed
-                                    if (string.IsNullOrEmpty(child.Variante))
-                                    {
-                                        estructuras[parentCodigo].Add(childStructure);
-                                        continue;
-                                    }
-
-                                    // Extract conditions of this child
-                                    Dictionary<string, string> conditions;
-                                    try
-                                    {
-                                        conditions = ExtractAllConditions(child.Variante);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"Error extracting conditions from '{child.Variante}': {ex.Message}");
-                                        // Add child anyway, without additional conditions
-                                        estructuras[parentCodigo].Add(childStructure);
-                                        continue;
-                                    }
-
-                                    // Verificar combinaciones especiales
-                                    string grupoOpc = "001";
-                                    string prefijoOpcional = null;
-
-                                    // Case 1: SOLO SEMILLA + ELECTRICA
-                                    if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                        ContainsCondition(conditions, "SEMILLA-", "ELECTRICA"))
-                                    {
-                                        prefijoOpcional = "SSE";
-                                    }
-                                    // Case 2: SOLO SEMILLA + HIDRAULICA
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                             ContainsCondition(conditions, "SEMILLA-", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "SSH";
-                                    }
-                                    // Case 3: SOLO SEMILLA + MECANICA
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                             ContainsCondition(conditions, "SEMILLA-", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "SSM";
-                                    }
-                                    // Case 4: FERTILIZACION SIMPLE + ELECTRICA
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "ELECTRICA"))
-                                    {
-                                        prefijoOpcional = "FSE";
-                                    }
-                                    // Case 5: FERTILIZACION SIMPLE + HIDRAULICA
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                            ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "FSH";
-                                    }
-                                    // Case 6: FERTILIZACION SIMPLE + MECANICA
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                            ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "FSM";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + DOBLE FERTILIZACION") &&
-                                            ContainsCondition(conditions, "FERTILIZACION-DOBLE", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "FDH";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + DOBLE FERTILIZACION") &&
-                                            ContainsCondition(conditions, "FERTILIZACION-DOBLE", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "FDM";
-                                    }
-                                    else
-                                    {
-                                        prefijoOpcional = "";
-                                        Console.WriteLine(string.Join("", conditions.Keys));
-                                    }
-                                    // Only add grupo_opc and opcional if we have a defined group
-                                    if (grupoOpc != null)
-                                    {
-                                        // Add grupo_opc
-
-
-                                        // Initialize counter for this configuration if it doesn't exist
-                                        if (prefijoOpcional != null && !configCounter.ContainsKey(prefijoOpcional))
-                                        {
-                                            configCounter[prefijoOpcional] = 1;
-                                        }
-
-                                        // Format depends on if it's a special case or normal
-                                        string valorOpcional;
-                                        if (prefijoOpcional != null && prefijoOpcional.Length > 1) // Special case (SSE, SSH, FSE)
-                                        {
-                                            valorOpcional = $"{prefijoOpcional}";
-                                            childStructure.Add(new Dictionary<string, string>
-                                {
-                                    { "campo", "grupo_opc" },
-                                    { "valor", grupoOpc }
-                                });
-                                            childStructure.Add(new Dictionary<string, string>
-                                {
-                                    { "campo", "opcional" },
-                                    { "valor", prefijoOpcional }
-                                });
-                                        }
-
-                                    }
-                                    else // Normal case with letter (A, B, C, etc.)
-                                    {
-                                        //valorOpcional = $"{prefijoOpcional ?? "A"}";
-                                    }
-
-                                    // Add opcional field
-
-                                    estructuras[parentCodigo].Add(childStructure);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
+                    listaHijos.Add(new List<Dictionary<string, string>>
             {
-                Console.WriteLine($"Error al consultar la base de datos: {ex.Message}");
-                Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                new Dictionary<string, string> { { "campo", "codigo" },   { "valor", codigo } },
+                new Dictionary<string, string> { { "campo", "cantidad" }, { "valor", cantidad } }
+            });
+                }
+
+                estructuras[product.producto] = listaHijos;
             }
 
-            // Generate and print JSON output
+            // DEBUG: mostrar JSONs
             foreach (var parent in estructuras)
             {
                 var jsonBody = new
@@ -556,8 +523,6 @@ namespace Web_Service
                 };
 
                 string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
-
-                // Print the generated JSON
                 Console.WriteLine("JSON generado:");
                 Console.WriteLine(jsonData);
             }
@@ -565,85 +530,6 @@ namespace Web_Service
             return estructuras;
         }
 
-        //public static async Task putSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
-        //{
-        //    string url = "http://119.8.73.193:8086/rest/TCEstructura/Modificar/";
-        //    string username = "USERREST";
-        //    string password = "restagr";
-
-        //    using (HttpClient client = new HttpClient())
-        //    {
-        //        var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-        //        client.DefaultRequestHeaders.Authorization =
-        //            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
-
-
-        //        foreach (var parent in estructuras)
-        //        {
-        //            var jsonBody = new
-        //            {
-        //                producto = parent.Key,
-        //                qtdBase = "1",
-        //                estructura = parent.Value
-        //            };
-
-        //            string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
-        //            JObject obj = JObject.Parse(jsonData);
-
-        //            // Obtener directamente el valor del campo "producto"
-        //            string? codigo = obj["producto"]?.ToString();
-
-        //            // Asegurarse de que el código no sea nulo
-        //            if (string.IsNullOrEmpty(codigo))
-        //            {
-        //                // Manejar el caso cuando no se encuentra el código del producto
-        //                Console.WriteLine("Error: No se pudo obtener el código del producto");
-        //                continue;
-        //            }
-
-        //            // Ahora puedes usar el código del producto
-        //            Console.WriteLine($"Código del producto: {codigo}");
-
-        //            // Continuar con el resto del procesamiento...
-
-
-        //            // Imprimir el JSON generado
-        //            Console.WriteLine("JSON generado:");
-        //            Console.WriteLine(jsonData);
-        //            Console.WriteLine(codigo);
-
-
-        //            int statusCode = 0;
-        //            string responseData = string.Empty;
-
-        //            try
-        //            {
-        //                var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-        //                HttpResponseMessage response = await client.PutAsync(url, content);
-
-        //                // Leer el código de estado
-        //                statusCode = (int)response.StatusCode;
-
-        //                // Leer la respuesta como string
-        //                responseData = await response.Content.ReadAsStringAsync();
-
-        //                // Verificar si la respuesta fue exitosa (puede lanzar excepción)
-        //                response.EnsureSuccessStatusCode();
-
-        //                Console.WriteLine($"Respuesta para producto {parent.Key}: {responseData}, {statusCode}");
-        //            }
-        //            catch (Exception ex)
-        //            {
-        //                Console.WriteLine($"Error al enviar producto {parent.Key}: {ex.Message}");
-        //            }
-        //            finally
-        //            {
-        //                // Se ejecutará siempre, tanto si hay error como si no
-        //                ActualizarBase(statusCode, responseData, codigo);
-        //            }
-        //        }
-        //    }
-        //}
         public static async Task putSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
         {
             string url = "http://119.8.73.193:8086/rest/TCEstructura/Modificar/";
@@ -683,7 +569,7 @@ namespace Web_Service
                     }
 
                     Console.WriteLine($"[SG1-PUT] JSON generado para producto {codigo} (primeros 800 caracteres):");
-                    Console.WriteLine(jsonData.Length > 800 ? jsonData.Substring(0, 800) + "..." : jsonData);
+                    Console.WriteLine(jsonData);
 
                     int statusCode = 0;
                     string responseData = string.Empty;
@@ -724,8 +610,10 @@ namespace Web_Service
 
         public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_MBOM()
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                            Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
             Console.WriteLine("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
 
@@ -753,7 +641,7 @@ namespace Web_Service
         )
         SELECT DISTINCT
             COALESCE(Parent.name, '')              AS Nombre_Padre,
-            COALESCE(CodFmt.CodigoPadre_Final, '') AS Codigo_Padre,      -- código padre formateado
+            COALESCE(CodFmt.CodigoPadre_Final, '') AS Process_codigo,      -- código padre formateado
             Child.name                             AS Nombre_Hijo,
             CodFmt.CodigoHijo_Final                AS Codigo_Hijo,       -- código hijo formateado
             Child.subType                          AS Subtype_Hijo,
@@ -920,7 +808,7 @@ namespace Web_Service
             Child.revision,
             Child.subType
         ORDER BY
-            Codigo_Padre;
+            Process_codigo;
         ";
 
             var estructuras = new Dictionary<string, List<List<Dictionary<string, string>>>>();
@@ -945,7 +833,7 @@ namespace Web_Service
                                 filasLeidas++;
 
                                 string parentName = reader["Nombre_Padre"]?.ToString() ?? string.Empty;
-                                string rawParentCod = reader["Codigo_Padre"]?.ToString();
+                                string rawParentCod = reader["Process_codigo"]?.ToString();
                                 string childName = reader["Nombre_Hijo"]?.ToString() ?? string.Empty;
                                 string childCodigo = reader["Codigo_Hijo"]?.ToString() ?? string.Empty;
                                 string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
@@ -967,7 +855,7 @@ namespace Web_Service
                                     else
                                     {
                                         // Caso realmente inválido: sin padre ni hijo
-                                        Console.WriteLine("[SG1-JSON] WARNING: fila sin Codigo_Padre ni Codigo_Hijo. Se omite.");
+                                        Console.WriteLine("[SG1-JSON] WARNING: fila sin Process_codigo ni Codigo_Hijo. Se omite.");
                                         continue;
                                     }
                                 }
@@ -1162,8 +1050,10 @@ namespace Web_Service
         }
         public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1()
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                      Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                          Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
 
             string query = @"WITH ParentItems AS (
@@ -1194,7 +1084,7 @@ namespace Web_Service
                 p.id_table AS parent_id_table,
                 p.name AS Nombre_Padre,
                 p.idXml,
-                p.codigo AS Codigo_Padre,
+                p.codigo AS Process_codigo,
                 p.Cantidad AS parent_cantidad,
                 c.name AS Nombre_Hijo,
                 c.codigo AS Codigo_Hijo,
@@ -1246,6 +1136,10 @@ namespace Web_Service
             {
                 using (SqlConnection connection = new SqlConnection(connectionString))
                 {
+                    Console.WriteLine($"[SG1] Conectando a servidor: {connection.DataSource}");
+                    Console.WriteLine($"[SG1] Base de datos:       {connection.Database}");
+                    Console.WriteLine("[SG1] Query que se va a ejecutar:");
+                    Console.WriteLine(query);
                     connection.Open();
 
                     using (SqlCommand command = new SqlCommand(query, connection))
@@ -1261,17 +1155,30 @@ namespace Web_Service
 
 
                                 string parentName = reader["Nombre_Padre"]?.ToString() ?? string.Empty;
-                                string? parentCodigo = reader["Codigo_Padre"]?.ToString();
+                                string? parentCodigo = reader["Process_codigo"]?.ToString();
                                 string childName = reader["Nombre_Hijo"]?.ToString() ?? string.Empty;
                                 string childCodigo = reader["Codigo_Hijo"]?.ToString() ?? string.Empty;
                                 Console.WriteLine("Este es el codigo que va al json: " + childCodigo);
-                                string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
+                                //string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
+                                string cantidadHijo = reader["CantidadHijo_Total"] == DBNull.Value
+                                    ? string.Empty
+                                    : reader["CantidadHijo_Total"].ToString().Replace(',', '.');
+                                Console.WriteLine($"[SG1] Total de filas devueltas por la query: {dataByParent.Values.Sum(lst => lst.Count)}");
+
 
                                 if (string.IsNullOrEmpty(parentCodigo))
                                 {
                                     Console.WriteLine("WARNING: Skipping record with null or empty ParentCodigo");
                                     continue;  // Skip this record
                                 }
+                                // ⛔ Cinturón de seguridad: NO agregues hijos sin cantidad
+                                if (string.IsNullOrWhiteSpace(cantidadHijo))
+                                {
+                                    Console.WriteLine($"[SG1] Skipping child {childCodigo} porque CantidadHijo_Total viene vacía/null");
+                                    continue;
+                                }
+
+                                Console.WriteLine("Este es el codigo que va al json: " + childCodigo + " | cantidad = " + cantidadHijo);
 
                                 var model = new DataModel
                                 {
@@ -1355,6 +1262,13 @@ namespace Web_Service
 
                                 foreach (var child in children)
                                 {
+                                    // Extra safe: por si alguna vez CantidadHijo llega vacía
+                                    if (string.IsNullOrWhiteSpace(child.CantidadHijo))
+                                    {
+                                        Console.WriteLine($"[SG1] No agrego al JSON el hijo {child.ChildCodigo} porque CantidadHijo está vacía");
+                                        continue;
+                                    }
+
                                     var childStructure = new List<Dictionary<string, string>>
                                     {
                                         new Dictionary<string, string> { { "campo", "codigo" }, { "valor", child.ChildCodigo } },
@@ -1506,454 +1420,13 @@ namespace Web_Service
 
             return estructuras;
         }
-        public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP()
-        {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                    Integrated Security=True;TrustServerCertificate=True";
 
-            Console.WriteLine("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
-
-            string query = @"
-WITH CTE_Hierarchy AS (
-    SELECT 
-        o.id_Table,
-        pr.name,
-        CASE WHEN LEFT(p.catalogueId, 2) = 'P-' 
-             THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2) 
-             ELSE p.catalogueId 
-        END AS catalogueId,
-        CAST(o.parentRef AS INT) AS parentRef,
-        pr.revision,
-        pr.subType,
-        o.idXml,
-
-        -- 👇 columnas alineadas con SB1
-        'PA' AS Tipo,
-        '01' AS Deposito,
-        CASE 
-            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
-            ELSE 'UN'
-        END AS unMedida
-
-    FROM ProcessOccurrence o
-    INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
-    INNER JOIN Process p          ON pr.masterRef   = p.id_Table
-    LEFT JOIN Form fUnidad
-           ON p.catalogueId = CASE
-                                WHEN CHARINDEX('/', fUnidad.name) > 0 
-                                     THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
-                                ELSE fUnidad.name
-                             END
-    LEFT JOIN UserValue_UserData uudUnidad
-           ON fUnidad.id_Table + 9 = uudUnidad.id_Father
-          AND p.idXml              = uudUnidad.idXml
-),
-
-CTE_Niveles AS (
-    -- Nivel 0 → nodos raíz
-    SELECT 
-        h.*,
-        0 AS Nivel
-    FROM CTE_Hierarchy h
-    WHERE h.parentRef IS NULL OR h.parentRef = 0
-
-    UNION ALL
-
-    -- Niveles siguientes (hijos)
-    SELECT 
-        h.*,
-        n.Nivel + 1
-    FROM CTE_Hierarchy h
-    INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
-)
-
--- 🟢 PRIMERA PARTE: jerarquía
-SELECT
-    COALESCE(Parent.name, '')        AS Nombre_Padre,
-    COALESCE(Parent.catalogueId, '') AS Codigo_Padre,
-    Child.name                       AS Nombre_Hijo,
-    Child.catalogueId                AS Codigo_Hijo,
-    Child.subType                    AS Subtype_Hijo,
-    Child.revision                   AS Revision,
-    1                                AS CantidadHijo_Total,
-    nChild.Nivel                     AS Nivel,
-    Child.Tipo,
-    Child.Deposito,
-    Child.unMedida
-FROM CTE_Niveles nChild
-LEFT JOIN CTE_Niveles   nParent ON nChild.parentRef = nParent.id_Table
-LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
-LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
-
-UNION ALL
-
--- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad
-SELECT 
-    Operation.name                      AS Nombre_Padre,
-    p2.catalogueId                      AS Codigo_Padre,
-    p.name                              AS Nombre_Hijo,
-    CASE WHEN LEFT(productId, 1) = 'E' 
-         THEN RIGHT(productId, LEN(productId) - 1) 
-         ELSE productId 
-    END                                 AS Codigo_Hijo,
-    pr.subType                          AS Subtype_Hijo,
-    pr.revision                         AS Revision,
-    COUNT(productId)                    AS CantidadHijo_Total,
-    3                                   AS Nivel,
-    'PA'                                AS Tipo,
-    '01'                                AS Deposito,
-    -- 👇 lógica de unidad de medida aplicada también acá
-    MAX(
-        CASE 
-            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
-            ELSE 'UN'
-        END
-    )                                   AS unMedida
-
-FROM Occurrence
-INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
-INNER JOIN Product         p  ON p.id_Table  = pr.masterRef
-LEFT JOIN ProcessOccurrence o   ON Occurrence.parentRef = o.id_Table
-LEFT JOIN OperationRevision op  ON op.id_Table         = o.instancedRef
-LEFT JOIN Operation             ON Operation.id_Table  = op.masterRef
-LEFT JOIN ProcessOccurrence o2  ON o2.id_Table         = o.parentRef
-LEFT JOIN ProcessRevision pr2   ON o2.instancedRef     = pr2.id_Table
-LEFT JOIN Process p2            ON pr2.masterRef       = p2.id_Table
-
--- 👇 joins para unidad de medida en la rama MEConsumed
-LEFT JOIN Form fUnidad2
-       ON p2.catalogueId = CASE
-                             WHEN CHARINDEX('/', fUnidad2.name) > 0 
-                                  THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
-                             ELSE fUnidad2.name
-                          END
-LEFT JOIN UserValue_UserData uudUnidad2
-       ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
-      AND p2.idXml              = uudUnidad2.idXml
-
-WHERE Occurrence.subType = 'MEConsumed'
-GROUP BY 
-    Operation.name,
-    p2.catalogueId,
-    p.name,
-    productId,
-    pr.subType,
-    pr.revision
---ORDER BY 
-    --Nivel,
-    --Codigo_Hijo DESC;
-
-";
-
-            var estructuras = new Dictionary<string, List<List<Dictionary<string, string>>>>();
-
-            try
-            {
-                using (SqlConnection connection = new SqlConnection(connectionString))
-                {
-                    connection.Open();
-                    Console.WriteLine("[SG1-JSON] Conexión a SQL abierta.");
-
-                    using (SqlCommand command = new SqlCommand(query, connection))
-                    {
-                        command.CommandTimeout = 5000;
-                        using (SqlDataReader reader = command.ExecuteReader())
-                        {
-                            var dataByParent = new Dictionary<string, List<DataModel>>();
-                            int filasLeidas = 0;
-
-                            while (reader.Read())
-                            {
-                                filasLeidas++;
-
-                                string parentName = reader["Nombre_Padre"]?.ToString() ?? string.Empty;
-                                string rawParentCod = reader["Codigo_Padre"]?.ToString();
-                                string childName = reader["Nombre_Hijo"]?.ToString() ?? string.Empty;
-                                string childCodigo = reader["Codigo_Hijo"]?.ToString() ?? string.Empty;
-                                string cantidadHijo = reader["CantidadHijo_Total"]?.ToString().Replace(',', '.') ?? string.Empty;
-
-                                // ⚠️ AQUÍ VIENE EL CAMBIO IMPORTANTE
-                                string parentCodigo = rawParentCod;
-                                bool esFilaRaiz = false;
-
-                                if (string.IsNullOrWhiteSpace(parentCodigo))
-                                {
-                                    if (!string.IsNullOrWhiteSpace(childCodigo))
-                                    {
-                                        // Esta fila representa al PADRE SUPREMO:
-                                        // usamos el código del hijo como código de padre lógico
-                                        parentCodigo = childCodigo;
-                                        esFilaRaiz = true;
-                                        Console.WriteLine($"[SG1-JSON] Fila raíz detectada → ParentCodigo={parentCodigo}, ChildCodigo={childCodigo}");
-                                    }
-                                    else
-                                    {
-                                        // Caso realmente inválido: sin padre ni hijo
-                                        Console.WriteLine("[SG1-JSON] WARNING: fila sin Codigo_Padre ni Codigo_Hijo. Se omite.");
-                                        continue;
-                                    }
-                                }
-
-                                var model = new DataModel
-                                {
-                                    ParentName = parentName,
-                                    ParentCodigo = parentCodigo,
-                                    ChildName = childName,
-                                    ChildCodigo = childCodigo,
-                                    CantidadHijo = cantidadHijo,
-                                    //Variante = ...
-                                };
-
-                                // ✅ SIEMPRE poblar la tabla SG1 local (incluye al padre supremo)
-                                poblarBaseSG1(parentName, parentCodigo, childName, childCodigo, cantidadHijo);
-
-                                if (!dataByParent.ContainsKey(model.ParentCodigo))
-                                    dataByParent[model.ParentCodigo] = new List<DataModel>();
-
-                                dataByParent[model.ParentCodigo].Add(model);
-                            }
-
-                            Console.WriteLine($"[SG1-JSON] SQL procesado. Filas leídas: {filasLeidas}. Padres distintos (lógicos): {dataByParent.Count}");
-
-                            // ====== ARMADO DE ESTRUCTURAS PARA CADA PADRE ======
-                            foreach (var parentGroup in dataByParent)
-                            {
-                                string parentCodigo = parentGroup.Key;
-                                List<DataModel> children = parentGroup.Value;
-
-                                if (!estructuras.ContainsKey(parentCodigo))
-                                    estructuras[parentCodigo] = new List<List<Dictionary<string, string>>>();
-
-                                var allConditions = new Dictionary<string, List<string>>();
-
-                                // Recolección de variantes (si la usás)
-                                foreach (var child in children)
-                                {
-                                    if (!string.IsNullOrEmpty(child.Variante))
-                                    {
-                                        try
-                                        {
-                                            var conditions = ExtractAllConditions(child.Variante);
-                                            foreach (var condition in conditions)
-                                            {
-                                                if (condition.Key == null)
-                                                {
-                                                    Console.WriteLine($"WARNING: Null key found in conditions for Variante: {child.Variante}");
-                                                    continue;
-                                                }
-
-                                                if (!allConditions.ContainsKey(condition.Key))
-                                                    allConditions[condition.Key] = new List<string>();
-
-                                                if (!allConditions[condition.Key].Contains(condition.Value))
-                                                    allConditions[condition.Key].Add(condition.Value);
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine($"Error processing Variante '{child.Variante}': {ex.Message}");
-                                        }
-                                    }
-                                }
-
-                                var configCounter = new Dictionary<string, int>();
-
-                                foreach (var child in children)
-                                {
-                                    // 🚫 NO generar componente autoreferenciado (producto supremo dentro de su propia estructura)
-                                    if (!string.IsNullOrEmpty(child.ChildCodigo) &&
-                                        child.ChildCodigo == parentCodigo)
-                                    {
-                                        Console.WriteLine($"[SG1-JSON] INFO: se omite línea autoreferenciada {child.ChildCodigo} en estructura de {parentCodigo}");
-                                        continue;
-                                    }
-
-                                    var childStructure = new List<Dictionary<string, string>>
-                            {
-                                new() { { "campo", "codigo"   }, { "valor", child.ChildCodigo } },
-                                new() { { "campo", "cantidad" }, { "valor", child.CantidadHijo } }
-                            };
-
-                                    // Sin variante → solo código + cantidad
-                                    if (string.IsNullOrEmpty(child.Variante))
-                                    {
-                                        estructuras[parentCodigo].Add(childStructure);
-                                        continue;
-                                    }
-
-                                    Dictionary<string, string> conditions;
-                                    try
-                                    {
-                                        conditions = ExtractAllConditions(child.Variante);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"Error extracting conditions from '{child.Variante}': {ex.Message}");
-                                        estructuras[parentCodigo].Add(childStructure);
-                                        continue;
-                                    }
-
-                                    string grupoOpc = "001";
-                                    string prefijoOpcional = null;
-
-                                    // (toda la lógica de SSE/SSH/SSM/FSE/... igual que antes)
-                                    if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                        ContainsCondition(conditions, "SEMILLA-", "ELECTRICA"))
-                                    {
-                                        prefijoOpcional = "SSE";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                             ContainsCondition(conditions, "SEMILLA-", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "SSH";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SOLO SEMILLA") &&
-                                             ContainsCondition(conditions, "SEMILLA-", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "SSM";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "ELECTRICA"))
-                                    {
-                                        prefijoOpcional = "FSE";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "FSH";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + SIMPLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-SIMPLE", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "FSM";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + DOBLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-DOBLE", "HIDRAULICA"))
-                                    {
-                                        prefijoOpcional = "FDH";
-                                    }
-                                    else if (ContainsCondition(conditions, "CONFIGURACION DE USO", "SEMILLA + DOBLE FERTILIZACION") &&
-                                             ContainsCondition(conditions, "FERTILIZACION-DOBLE", "MECANICA"))
-                                    {
-                                        prefijoOpcional = "FDM";
-                                    }
-                                    else
-                                    {
-                                        prefijoOpcional = "";
-                                        Console.WriteLine(string.Join("", conditions.Keys));
-                                    }
-
-                                    if (grupoOpc != null &&
-                                        !string.IsNullOrEmpty(prefijoOpcional) &&
-                                        prefijoOpcional.Length > 1)
-                                    {
-                                        if (!configCounter.ContainsKey(prefijoOpcional))
-                                            configCounter[prefijoOpcional] = 1;
-
-                                        childStructure.Add(new Dictionary<string, string>
-                                {
-                                    { "campo", "grupo_opc" },
-                                    { "valor", grupoOpc }
-                                });
-
-                                        childStructure.Add(new Dictionary<string, string>
-                                {
-                                    { "campo", "opcional" },
-                                    { "valor", prefijoOpcional }
-                                });
-                                    }
-
-                                    estructuras[parentCodigo].Add(childStructure);
-                                }
-
-                                Console.WriteLine($"[SG1-JSON] Padre {parentCodigo}: hijos en estructura = {estructuras[parentCodigo].Count}");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[SG1-JSON] ERROR al consultar la base: {ex.Message}");
-                Console.WriteLine($"[SG1-JSON] Stack trace: {ex.StackTrace}");
-            }
-
-            Console.WriteLine($"[SG1-JSON] Estructuras generadas para {estructuras.Count} productos.");
-
-            return estructuras;
-        }
-
-
-
-        //        public static void poblarBaseSG1(string Nombre_Padre, string Codigo_Padre, string Nombre_Hijo, string Codigo_Hijo, string CantidadHijo)
-        //        {
-        //            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-        //                                      Integrated Security=True;TrustServerCertificate=True";
-        //            string query = "INSERT INTO SG1 VALUES (@Nombre_Padre, @Codigo_Padre, @Nombre_Hijo, @Codigo_Hijo, @CantidadHijo, NULL, NULL)";
-        //            try
-        //            {
-        //                using (SqlConnection connection = new SqlConnection(connectionString))
-        //                {
-        //                    connection.Open();
-
-        //                    using (SqlCommand command = new SqlCommand(query, connection))
-        //                    {
-        //                        command.Parameters.AddWithValue("@Nombre_Padre", Nombre_Padre);
-        //                        command.Parameters.AddWithValue("@Codigo_Padre", Codigo_Padre);
-        //                        command.Parameters.AddWithValue("@Nombre_Hijo", Nombre_Hijo);
-        //                        command.Parameters.AddWithValue("@Codigo_Hijo", Codigo_Hijo);
-        //                        command.Parameters.AddWithValue("@CantidadHijo", CantidadHijo);
-        //                        command.ExecuteNonQuery();
-        //                    }
-
-        //                }
-        //            }
-        //            catch (Exception ex)
-        //            {
-
-        //            }
-        //        }
-
-        //        public static void ActualizarBase(int estado, string mensaje, string codigo)
-        //        {
-        //            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-        //                                      Integrated Security=True;TrustServerCertificate=True";
-        //            string query = @"UPDATE SG1
-        //                          SET estado = @estado, mensaje = @mensaje
-        //                          WHERE Codigo_Padre = @codigo
-        //--AND descripcion = @descripcion 
-        //--AND estado BETWEEN 400 AND 409";
-        //            try
-        //            {
-        //                using (SqlConnection connection = new SqlConnection(connectionString))
-        //                {
-        //                    connection.Open();
-
-        //                    using (SqlCommand command = new SqlCommand(query, connection))
-        //                    {
-        //                        command.Parameters.AddWithValue("@estado", estado);
-        //                        command.Parameters.AddWithValue("@mensaje", mensaje);
-        //                        command.Parameters.AddWithValue("@codigo", codigo);
-        //                        command.ExecuteNonQuery();
-        //                    }
-
-        //                }
-        //            }
-        //            catch (Exception ex)
-        //            {
-
-        //            }
-        //        }
         public static void poblarBaseSG1(string Nombre_Padre, string Codigo_Padre, string Nombre_Hijo, string Codigo_Hijo, string CantidadHijo)
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                    Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
             string query = "INSERT INTO SG1 VALUES (@Nombre_Padre, @Codigo_Padre, @Nombre_Hijo, @Codigo_Hijo, @CantidadHijo, NULL, NULL)";
             try
             {
@@ -1980,8 +1453,10 @@ GROUP BY
 
         public static void ActualizarBase(int estado, string mensaje, string codigo)
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                    Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
             string query = @"UPDATE SG1
                      SET estado = @estado, mensaje = @mensaje
                      WHERE Codigo_Padre = @codigo";
