@@ -26,105 +26,7 @@ namespace Web_Service
             public int? errorCode { get; set; }
             public string errorMessage { get; set; }
         }
-        //public static async Task postSG2_SH3(string jsonData)
-        //{
-        //    string url = "http://119.8.73.193:8086/rest/TCProceso/Incluir/"; // URL del servicio REST
 
-        //    string username = "USERREST"; // Usuario proporcionado
-        //    string password = "restagr"; // Contraseña proporcionada
-
-
-        //    using (HttpClient client = new HttpClient())
-        //    {
-        //        try
-        //        {
-        //            // Configurar credenciales Basic Auth
-        //            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-        //            client.DefaultRequestHeaders.Authorization =
-        //                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
-
-        //            // Configurar el contenido de la solicitud
-        //            var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-
-        //            // Realizar la solicitud POST
-        //            HttpResponseMessage response = await client.PostAsync(url, content);
-
-        //            // Leer la respuesta como string
-        //            string responseData = await response.Content.ReadAsStringAsync();
-
-        //            Console.WriteLine($"POST TCProceso -> {(int)response.StatusCode} {response.ReasonPhrase}\n{responseData}");
-
-        //            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
-        //            {
-        //                Console.WriteLine("Ya existe (409). Intentando PUT /Modificar...");
-        //                await putSG2_SH3(jsonData);     // llamada a la función PUT
-        //                return;                         // salimos después del PUT
-        //            }
-
-        //            // Si no fue 409, ahora sí validamos éxito del POST
-        //            //if (!response.IsSuccessStatusCode)
-        //            //{
-        //            //    //    var bodyErr = await response.Content.ReadAsStringAsync();
-        //            //    Console.WriteLine($"POST falló (no 409). Ver detalle arriba.");
-        //            //    return;
-        //            //}
-        //            //else
-        //            //{
-        //            //    Console.WriteLine("POST ok.");
-        //            //}
-
-        //            // Asegurarse de que la respuesta sea exitosa
-        //            response.EnsureSuccessStatusCode();
-
-        //            // Mostrar la respuesta en consola
-        //            Console.WriteLine("Respuesta del servicio:");
-        //            Console.WriteLine(responseData);
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
-        //        }
-        //    }
-        //}
-
-
-
-        //public static async Task putSG2_SH3(string jsonData)
-        //{
-        //    string url = "http://119.8.73.193:8086/rest/TCProceso/Modificar/";
-        //    string username = "USERREST";
-        //    string password = "restagr";
-
-        //    using (var client = new HttpClient())
-        //    {
-        //        try
-        //        {
-        //            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-        //            client.DefaultRequestHeaders.Authorization =
-        //                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
-
-        //            var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-
-        //            HttpResponseMessage response = await client.PutAsync(url, content);
-
-        //            if (!response.IsSuccessStatusCode)
-        //            {
-        //                var bodyErr = await response.Content.ReadAsStringAsync();
-        //                Console.WriteLine($"PUT falló: {(int)response.StatusCode} {response.ReasonPhrase}\n{bodyErr}");
-        //                return;
-        //            }
-
-        //            string responseData = await response.Content.ReadAsStringAsync();
-        //            Console.WriteLine("Respuesta del servicio (PUT ok):");
-        //            Console.WriteLine(responseData);
-        //            return;
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Console.WriteLine($"Error al consumir el servicio: {ex.Message}");
-        //        }
-        //    }
-        //}
         public static async Task EnviarSG2_SH3(string jsonData)
         {
             string urlPost = "http://119.8.73.193:8086/rest/TCProceso/Incluir/";
@@ -575,8 +477,10 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
         public static List<string> jsonSG2_SH3()
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                      Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                          Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
 
             List<string> jsonProductos = new List<string>();
@@ -663,15 +567,15 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                             var nuevoProc = new Procedimiento
                             {
                                 detalle = new List<CampoValor>
-                                {
-                                    new CampoValor { campo = "operacion",   valor = operacionPaso },
-                                    new CampoValor { campo = "recurso",     valor = "" },  // se completa con el principal
-                                    new CampoValor { campo = "tiempo",      valor = tiempo },
-                                    new CampoValor { campo = "centroTrabajo", valor = centroTrabajo },
-                                    new CampoValor { campo = "descripcion", valor = nombreOperacion },
-                                    new CampoValor { campo = "loteStd",     valor = lote }
-                                },
-                                alternativos = new List<CampoValor>()
+                                    {
+                                        new CampoValor { campo = "operacion",   valor = operacionPaso },
+                                        new CampoValor { campo = "recurso",     valor = "" },  // se completa con el principal
+                                        new CampoValor { campo = "tiempo",      valor = tiempo },
+                                        new CampoValor { campo = "centroTrabajo", valor = centroTrabajo },
+                                        new CampoValor { campo = "descripcion", valor = nombreOperacion },
+                                        new CampoValor { campo = "loteStd",     valor = lote }
+                                    },
+                                alternativos = new List<List<CampoValor>>()   // <-- cambio acá
                             };
 
                             procPorProductoOperacion[keyProc] = nuevoProc;
@@ -706,7 +610,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
                         if (nroRecurso == 1)
                         {
-                            //Recurso principal
+                            // Recurso principal
                             var campoRecurso = proc.detalle.First(x => x.campo == "recurso");
                             campoRecurso.valor = recurso;
 
@@ -715,21 +619,18 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                         }
                         else
                         {
-                            //Recurso alternativo
-                            proc.alternativos.Add(new CampoValor
+                            // Recurso alternativo: cada alternativo es UNA lista de CampoValor
+                            var alternativo = new List<CampoValor>
                             {
-                                campo = "recursoAlt",
-                                valor = recurso,
-                                
-                            });
-                            proc.alternativos.Add(new CampoValor
-                            {
-                                campo = "tipoAlt",
-                                valor = "A"
-                            });
+                                new CampoValor { campo = "recursoAlt", valor = recurso },
+                                new CampoValor { campo = "tipoAlt",    valor = "A" }
+                            };
+
+                            proc.alternativos.Add(alternativo);
                         }
 
-                       
+
+
                     }
 
                     Utilidades.EscribirEnLog($"jsonSG2_SH3 -> filas leídas de la query: {filas}");
@@ -759,8 +660,10 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
         public static List<string> jsonSB1_BOP()
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                        Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                            Integrated Security=True;TrustServerCertificate=True";
+
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
             // 1) Batch para endurecer el esquema (idempotente)
             const string schemaPatch = @"
@@ -855,7 +758,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             'PA' AS tipo,
             '01' AS deposito,
             'UN' AS 'Unidad de Medida',
-            fpn.first_process_name AS Process_name,
+            fpn.first_process_name AS Process_codigo,
             pr.subType
             FROM Operation O
             CROSS JOIN FirstProcess_codigo fpn
@@ -901,7 +804,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             'PA' AS tipo,
             '01' AS deposito,
             'UN' AS unMedida,
-            fpn.first_process_name AS Process_name,
+            fpn.first_process_name AS Process_codigo,
             pr.subType
             FROM Product p
             INNER JOIN ProductRevision pr ON pr.masterRef = p.id_Table
@@ -961,7 +864,10 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
         public class Procedimiento
         {
             public List<CampoValor> detalle { get; set; }
-            public List<CampoValor> alternativos { get; set; }
+
+            // Antes: public List<CampoValor> alternativos { get; set; }
+            // Ahora: lista de listas para cumplir con el formato del WS
+            public List<List<CampoValor>> alternativos { get; set; }
         }
 
         public class CampoValor

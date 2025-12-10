@@ -20,8 +20,10 @@ namespace Web_Service // Note: actual namespace depends on the project name.
 
         static async Task Main(string[] args)
         {
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                Integrated Security=True;TrustServerCertificate=True";
+            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
+            //                    Integrated Security=True;TrustServerCertificate=True";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+
 
             await ProcesarMBOM(connectionString);
 
@@ -31,7 +33,8 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                 conn.Open();
                 BorrarTabla(conn, new Dictionary<string, TableBucket>());
             }
-
+            Console.WriteLine("Presione ENTER para finalizar MBOM...");
+            Console.ReadLine();
 
             await ProcesarBOP(connectionString);
 
@@ -120,9 +123,9 @@ CTE_Niveles AS (
 -- 🟢 PRIMERA PARTE: jerarquía
 SELECT
     COALESCE(Parent.name, '')        AS Nombre_Padre,
-    COALESCE(Parent.catalogueId, '') AS Codigo_Padre,
+    COALESCE(Parent.catalogueId, '') AS Process_codigo,
     Child.name                       AS Nombre_Hijo,
-    Child.catalogueId                AS Codigo_Hijo,
+    Child.catalogueId                AS PR_Codigo,
     Child.subType                    AS Subtype_Hijo,
     Child.revision                   AS Revision,
     1                                AS CantidadHijo_Total,
@@ -140,12 +143,12 @@ UNION ALL
 -- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad
 SELECT 
     Operation.name                      AS Nombre_Padre,
-    p2.catalogueId                      AS Codigo_Padre,
+    p2.catalogueId                      AS Process_codigo,
     p.name                              AS Nombre_Hijo,
     CASE WHEN LEFT(productId, 1) = 'E' 
          THEN RIGHT(productId, LEN(productId) - 1) 
          ELSE productId 
-    END                                 AS Codigo_Hijo,
+    END                                 AS PR_Codigo,
     pr.subType                          AS Subtype_Hijo,
     pr.revision                         AS Revision,
     COUNT(productId)                    AS CantidadHijo_Total,
@@ -194,7 +197,7 @@ GROUP BY
     pr.revision
 ORDER BY 
     Nivel,
-    Codigo_Hijo DESC;
+    PR_Codigo DESC;
 ";
 
             var converter = new SqlToJsonConverter(connectionString);
@@ -208,13 +211,19 @@ ORDER BY
                 Console.WriteLine("No existe carpeta BOP_input");
                 return;
             }
+            if (!Directory.Exists(carpetaProcesados))
+            {
+                Console.WriteLine("No existe carpetaProcesados");
+                return;
+            }
 
             string[] archivos = Directory.GetFiles(carpetaInput);
             int contadorXmls = 1;
-            bool borrarTablas = true;
+            
 
             foreach (string archivo in archivos)
             {
+                bool borrarTablas = true;
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando BOP: {Path.GetFileName(archivo)}");
@@ -229,6 +238,8 @@ ORDER BY
 
                         if (ParseNode(root, groupedDataRows))
                         {
+                            Console.WriteLine("Presione ENTER para borrar tablas...");
+                            Console.ReadLine();
                             if (borrarTablas)
                             {
                                 BorrarTabla(connection, groupedDataRows);
@@ -237,53 +248,6 @@ ORDER BY
 
                             CreateTable(connection, groupedDataRows);
                             InsertData(connection, groupedDataRows, archivo, contadorXmls);
-
-                            // SB1 (productos de la BOP)
-                            Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
-                            var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
-                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
-
-                            foreach (string s in listaSB1_BOP)
-                            {
-                                Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
-                                await Tabla_SB1.postSB1(s);
-                            }
-
-                            // SG1 (estructuras de la BOP)
-                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
-                            var estructurasMBOM = Tabla_SG1.jsonSG1_BOP_Miercoles();
-                            Console.WriteLine(estructurasMBOM);
-                            Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
-
-                            await Tabla_SG1.postSG1(estructurasMBOM);
-                            Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
-
-
-
-                            // SG2/SH3 (procesos)
-                            var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
-                            foreach (string s in listaSG2) { 
-                                await Tablas_SG2_SH3.EnviarSG2_SH3(s);
-                                Console.WriteLine("-- sg2/sh3 --");
-                                Console.WriteLine(s);
-                            }
-                            // Mostrar la estructura
-                            Console.WriteLine("=== ESTRUCTURA JERÁRQUICA ===");
-                            converter.ShowBOMTree(sqlQuery);
-
-                            // JSONs jerárquicos
-                            Console.WriteLine("\n=== JSONs INDIVIDUALES ===");
-                            converter.ProcessHierarchicalJsons(sqlQuery);
-
-                            var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
-                            Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
-
-                            for (int i = 0; i < jsonStrings.Count; i++)
-                            {
-                                Console.WriteLine($"\nJSON #{i + 1}:");
-                                Console.WriteLine(jsonStrings[i]);
-                            }
-
                             // Mover procesado
                             string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
                             if (File.Exists(destino))
@@ -294,6 +258,55 @@ ORDER BY
                             }
                             File.Move(archivo, destino);
                             contadorXmls++;
+                            // SB1 (productos de la BOP)
+                            Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
+                            var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
+                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
+
+                            foreach (string s in listaSB1_BOP)
+                            {
+                                Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                                //await Tabla_SB1.postSB1(s);
+                            }
+
+                            // SG1 (estructuras de la BOP)
+                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
+                            var estructurasMBOM = Tabla_SG1.jsonSG1_BOP();
+                            Console.WriteLine(estructurasMBOM);
+                            Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+
+                            //await Tabla_SG1.postSG1(estructurasMBOM);
+                            Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
+
+
+
+                            // SG2/SH3 (procesos)
+                            var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
+                            foreach (string s in listaSG2) { 
+                                //await Tablas_SG2_SH3.EnviarSG2_SH3(s);
+                                Console.WriteLine("-- sg2/sh3 --");
+                                Console.WriteLine(s);
+                            }
+
+
+                            // Mostrar la estructura
+                            Console.WriteLine("=============================");
+                            //converter.ShowBOMTree(sqlQuery);
+
+                            // JSONs jerárquicos
+                            Console.WriteLine("\n============================");
+                            //converter.ProcessHierarchicalJsons(sqlQuery);
+
+                            var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                            Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
+
+                            for (int i = 0; i < jsonStrings.Count; i++)
+                            {
+                                Console.WriteLine($"\nJSON #{i + 1}:");
+                                Console.WriteLine(jsonStrings[i]);
+                            }
+
+
                         }
                     }
 
@@ -323,10 +336,11 @@ ORDER BY
 
             string[] archivos = Directory.GetFiles(carpetaInput);
             int contadorXmls = 1;
-            bool borrarTablas = true;
+            
 
             foreach (string archivo in archivos)
             {
+                bool borrarTablas = true;
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando MBOM: {Path.GetFileName(archivo)}");
@@ -340,9 +354,11 @@ ORDER BY
 
                         if (ParseNode(root, groupedDataRows))
                         {
+                            Console.WriteLine("Presione ENTER para borrar tablas...");
+                            Console.ReadLine();
                             if (borrarTablas)
                             {
-                                BorrarTabla(connection, groupedDataRows);
+                                //BorrarTabla(connection, groupedDataRows);
                                 borrarTablas = false;
                                 Console.WriteLine("Borrando tablas");
                             }
@@ -351,9 +367,11 @@ ORDER BY
                             Console.WriteLine("Creando tablas");
                             InsertData(connection, groupedDataRows, archivo, contadorXmls);
 
-                            //Console.WriteLine("[MBOM] Generando SB1...");
-                            //var listaSB1_MBOM = Tabla_SB1.jsonSB1();
-                            //Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
+                            Console.WriteLine("[MBOM] Generando SB1...");
+                            var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM();
+                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
+                            Console.WriteLine("Presione ENTER para finalizar SB1...");
+                            Console.ReadLine();
 
                             //foreach (string s in listaSB1_MBOM)
                             //{
@@ -366,9 +384,10 @@ ORDER BY
                             var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
 
-                            await Tabla_SG1.postSG1(estructurasMBOM);
+                            //await Tabla_SG1.postSG1(estructurasMBOM);
                             Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
-
+                            Console.WriteLine("Presione ENTER para finalizar SG1...");
+                            Console.ReadLine();
 
                             // Mover procesado
                             string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
@@ -515,55 +534,6 @@ ORDER BY
                 return false;
             }
         }
-
-
-        //static bool ParseNode(XmlNode node, Dictionary<string, List<DataRow>> groupedDataRows, string parentNodeName = "")
-        //{
-        //    var listaIgnorados = new List<string> { "ApplicationRef", "AttributeContext",
-        //                                    "ExternalFile", "Folder",
-        //                                    "RevisionRule", "Site", "Transform", "View" };
-        //    try
-        //    {
-        //        if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
-        //        {
-        //            string nodeName = node.Name;
-        //            Console.WriteLine($"Parseando nodo: {nodeName}");
-
-        //            DataRow dataRow = new DataRow();
-        //            dataRow.NombreNodo = nodeName;
-        //            dataRow.Atributos = new List<string>();
-
-        //            foreach (XmlAttribute attribute in node.Attributes)
-        //            {
-        //                //Console.WriteLine($"  Atributo encontrado en {nodeName}: {attribute.Name}");
-        //                dataRow.Atributos.Add(attribute.Name);
-        //            }
-
-        //            dataRow.XmlNode = node;
-        //            string tableName = GetTableName(nodeName, dataRow.Atributos, parentNodeName);
-        //            //Console.WriteLine($"  Nodo {nodeName} se mapea a tabla: {tableName}");
-
-        //            if (!groupedDataRows.ContainsKey(tableName))
-        //            {
-        //                groupedDataRows[tableName] = new List<DataRow>();
-        //            }
-        //            groupedDataRows[tableName].Add(dataRow);
-
-        //            foreach (XmlNode childNode in node.ChildNodes)
-        //            {
-        //                Console.WriteLine($"    -> Nodo hijo de {nodeName}: {childNode.Name}");
-        //                ParseNode(childNode, groupedDataRows, nodeName); // recursividad
-        //            }
-        //            return true;
-        //        }
-        //        return false;
-        //    }
-        //    catch (Exception ea)
-        //    {
-        //        Utilidades.EscribirEnLog("Excepcion controlada en el metodo ParseNode: " + ea.Message);
-        //        return false;
-        //    }
-        //}
         static string GetTableName(string nodeName, List<string> attributes, string parentNodeName)
         {
             string tableName = nodeName;
@@ -624,68 +594,6 @@ ORDER BY
             }
         }
 
-
-        //static void CreateTable(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows)
-        //{
-        //    try
-        //    {
-        //        foreach (var group in groupedDataRows)
-        //        {
-
-        //            string tableName = group.Key;
-        //            if (tableName == "PLMXML") // Saltar el nodo "PLMXML"
-        //            {
-        //                continue;
-        //            }
-        //            string createTableQuery = $"IF OBJECT_ID('[{tableName}]', 'U') IS NULL CREATE TABLE [{tableName}] (id INT IDENTITY(1,1) PRIMARY KEY, contenido NVARCHAR(MAX)";
-        //            List<string> additionalAttributes = new List<string>();
-        //            bool hasIdAttribute = false;
-
-        //            foreach (DataRow dataRow in group.Value)
-        //            {
-        //                foreach (string attribute in dataRow.Atributos)
-        //                {
-        //                    if (!additionalAttributes.Contains(attribute) && attribute != "id") //Adicional atributo
-        //                    {
-        //                        additionalAttributes.Add(attribute);
-        //                    }
-        //                    if (attribute == "id") //Existe el atributo id
-        //                    {
-        //                        hasIdAttribute = true;
-        //                    }
-        //                }
-        //            }
-
-        //            if (hasIdAttribute) // Existe el atributo "id", agregar id_Table
-        //            {
-        //                createTableQuery += ", id_Table NVARCHAR(MAX) ";
-        //            }
-        //            else // No existe el atributo "id", agregar id_Father
-        //            {
-        //                createTableQuery += ", id_Father NVARCHAR(MAX) ";
-        //            }
-        //            foreach (string columnName in additionalAttributes) //Creacion de columnas
-        //            {
-        //                if (columnName != "id")
-        //                {
-        //                    createTableQuery += $", [{columnName}] NVARCHAR(MAX)";
-        //                }
-        //            }
-        //            createTableQuery += ", idXml INT);";
-        //            using (SqlCommand command = new SqlCommand(createTableQuery, connection))
-        //            {
-        //                command.ExecuteNonQuery();
-        //            }
-        //        }
-        //    }
-        //    catch (Exception ea)
-        //    {
-        //        Utilidades.EscribirEnLog($"Excepcion controlada en el metodo createTable: {ea.Message}");
-        //        throw;
-        //    }
-
-        //}
-
         static void AlterTable(SqlConnection connection, string tableName, string columnName, string columnType)
         {
             try
@@ -706,112 +614,6 @@ ORDER BY
 
         }
 
-        //static void InsertData(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows, string xml, int contadorXmls)
-        //{
-        //    try
-        //    {
-        //        foreach (var group in groupedDataRows)
-        //        {
-        //            string tableName = group.Key;
-
-        //            foreach (DataRow dataRow in group.Value)
-        //            {
-        //                if (dataRow.NombreNodo == "PLMXML") // Saltar el nodo "PLMXML"
-        //                    continue;
-        //                string insertQuery = $"INSERT INTO [{tableName}] (";
-        //                List<string> columnNames = new List<string>();
-        //                List<string> parameterNames = new List<string>();
-        //                List<SqlParameter> parameters = new List<SqlParameter>();
-        //                bool hasIdAttribute = false;
-
-
-        //                foreach (string columnName in dataRow.Atributos)
-        //                {
-
-        //                    if (columnName == "id" || columnName == "instancedRef" || columnName == "masterRef" || columnName == "parentRef" || columnName == "instanceRefs") //Columna id_Table, instancedRef y masterRef
-        //                    {
-        //                        string attributeValue1 = dataRow.XmlNode.Attributes[columnName]?.Value;
-
-        //                        if (columnName == "id" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-        //                        {
-        //                            hasIdAttribute = true;
-        //                            columnNames.Add("[id_Table]");
-        //                            parameterNames.Add("@id");
-        //                            attributeValue1 = attributeValue1.Substring(2); //Suprimir los dos primeros caracteres
-        //                            parameters.Add(new SqlParameter("@id", attributeValue1));
-        //                        }
-        //                        if (columnName == "instancedRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-        //                        {
-        //                            columnNames.Add("[instancedRef]");
-        //                            parameterNames.Add("@instancedRef");
-        //                            attributeValue1 = attributeValue1.Substring(3); //Suprimir los dos primeros caracteres
-        //                            parameters.Add(new SqlParameter("@instancedRef", attributeValue1));
-        //                        }
-        //                        if (columnName == "masterRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-        //                        {
-        //                            columnNames.Add("[masterRef]");
-        //                            parameterNames.Add("@masterRef");
-        //                            attributeValue1 = attributeValue1.Substring(3); //Suprimir los dos primeros caracteres
-        //                            parameters.Add(new SqlParameter("@masterRef", attributeValue1));
-        //                        }
-        //                        if (columnName == "parentRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-        //                        {
-        //                            columnNames.Add("[parentRef]");
-        //                            parameterNames.Add("@parentRef");
-        //                            attributeValue1 = attributeValue1.Substring(3); //Suprimir los tres primeros caracteres
-        //                            parameters.Add(new SqlParameter("@parentRef", attributeValue1));
-        //                        }
-        //                        if (columnName == "instanceRefs" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-        //                        {
-        //                            columnNames.Add("[instanceRefs]");
-        //                            parameterNames.Add("@instanceRefs");
-        //                            attributeValue1 = attributeValue1.Substring(3); //Suprimir los tres primeros caracteres
-        //                            parameters.Add(new SqlParameter("@instanceRefs", attributeValue1));
-        //                        }
-        //                        continue;
-        //                    }
-        //                    AlterTable(connection, tableName, columnName, "NVARCHAR(MAX)");
-        //                    columnNames.Add($"[{columnName}]"); //Columnas de otros atributos que no son id,contenido y id_father
-        //                    parameterNames.Add($"@{columnName}");
-        //                    string attributeValue = dataRow.XmlNode.Attributes[columnName]?.Value;
-        //                    attributeValue = attributeValue.Replace("'", "''");
-        //                    parameters.Add(new SqlParameter($"@{columnName}", attributeValue));
-
-        //                }
-        //                columnNames.Add("[contenido]");//Columna contenido
-        //                parameterNames.Add("@contenido");
-        //                parameters.Add(new SqlParameter("@contenido", dataRow.XmlNode.InnerText));
-
-        //                if (!hasIdAttribute) //Columna de tablas sin id
-        //                {
-        //                    columnNames.Add("[id_Father]");
-        //                    parameterNames.Add("@idFather");
-        //                    XmlNode parentNode = dataRow.XmlNode.ParentNode;
-        //                    string parentAttributeValue = parentNode?.Attributes["id"]?.Value;
-        //                    string parentAttributeId = parentAttributeValue?.Substring(2) ?? "0";
-        //                    parameters.Add(new SqlParameter("@idFather", parentAttributeId));
-        //                }
-        //                columnNames.Add("[idXml]"); // Agregar la columna idXml
-        //                parameterNames.Add("@idXml");
-        //                parameters.Add(new SqlParameter("@idXml", contadorXmls)); // Insertar el valor de contadorXmls
-
-        //                insertQuery += string.Join(", ", columnNames) + ") VALUES (";
-        //                insertQuery += string.Join(", ", parameterNames) + ");";
-
-        //                using (SqlCommand command = new SqlCommand(insertQuery, connection))
-        //                {
-        //                    command.Parameters.AddRange(parameters.ToArray());
-        //                    command.ExecuteNonQuery();
-        //                }
-        //            }
-        //        }
-        //    }
-        //    catch (Exception ea)
-        //    {
-        //        Utilidades.EscribirEnLog($"Excepcion controlada en el metodo InsertData {ea.Message}");
-        //    }
-
-        //}
         static void InsertData(SqlConnection connection, Dictionary<string, TableBucket> tables, string xml, int contadorXmls)
         {
             try
