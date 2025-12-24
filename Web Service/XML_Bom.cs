@@ -12,8 +12,7 @@ namespace Web_Service
     {
         public bool ParseNode(XmlNode node, Dictionary<string, List<DataRow>> groupedDataRows, string parentNodeName = "")
         {
-            var listaIgnorados = new List<string> { "ApplicationRef", "AssociatedDataSet", "AttributeContext", "DataSet",
-                                            "ExternalFile", "Folder",
+            var listaIgnorados = new List<string> { "ApplicationRef", "AttributeContext",
                                              "RevisionRule", "Site", "Transform", "View" };
 
             try

@@ -11,7 +11,7 @@ namespace Web_Service
         public static void EscribirEnLog(string mensaje)
         {
             // Lógica para escribir en el log
-            string rutaLog = "C:\\Temp\\log.txt";
+            string rutaLog = "C:\\Temp\\log2212.txt";
             //string rutaLog = @"C:\Crucianelli\log.txt";
             File.AppendAllText(rutaLog, $"{DateTime.Now} - {mensaje}{Environment.NewLine}");
         }
