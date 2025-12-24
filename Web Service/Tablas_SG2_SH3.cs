@@ -14,6 +14,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using static Web_Service.Program;
+using static Web_Service.SqlToJsonConverter;
 using static Web_Service.Tablas_SG2_SH3;
 
 namespace Web_Service
@@ -46,10 +47,13 @@ namespace Web_Service
 
             Console.WriteLine($"POST TCProceso -> {(int)responsePost.StatusCode} {responsePost.ReasonPhrase}");
             Console.WriteLine(bodyPost);
+            Utilidades.EscribirEnLog($"POST TCProceso -> {(int)responsePost.StatusCode} {responsePost.ReasonPhrase}");
+            Utilidades.EscribirEnLog(bodyPost);
 
             if (responsePost.IsSuccessStatusCode)
             {
                 Console.WriteLine("POST OK, no hace falta PUT.");
+                Utilidades.EscribirEnLog("POST OK, no hace falta PUT.");
                 return;
             }
 
@@ -62,21 +66,24 @@ namespace Web_Service
             if (!esRegistroExistente)
             {
                 Console.WriteLine("POST falló por otra causa, NO se intenta PUT.");
+                Utilidades.EscribirEnLog("POST falló por otra causa, NO se intenta PUT.");
                 return;
             }
 
             Console.WriteLine("Intentando PUT /Modificar por registro existente...");
-
+            Utilidades.EscribirEnLog("Intentando PUT /Modificar por registro existente...");
             var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
             var responsePut = await client.PutAsync(urlPut, contentPut);
             var bodyPut = await responsePut.Content.ReadAsStringAsync();
 
             Console.WriteLine($"PUT TCProceso -> {(int)responsePut.StatusCode} {responsePut.ReasonPhrase}");
             Console.WriteLine(bodyPut);
-
+            Utilidades.EscribirEnLog($"PUT TCProceso -> {(int)responsePut.StatusCode} {responsePut.ReasonPhrase}");
+            Utilidades.EscribirEnLog(bodyPut);
             if (!responsePut.IsSuccessStatusCode)
             {
                 Console.WriteLine("PUT falló, no se reintenta para evitar bucles.");
+                Utilidades.EscribirEnLog("PUT falló, no se reintenta para evitar bucles.");
             }
         }
 
@@ -128,7 +135,7 @@ namespace Web_Service
     ta.tiempo_segundos,
     ta.tiempo_fmt   AS tiempo,
     ta.lote_val     AS loteStd,
-	ROW_NUMBER() OVER (
+    ROW_NUMBER() OVER (
         PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
         ORDER BY prod.productId
     ) AS nro_recurso
@@ -139,11 +146,11 @@ INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
 -- WorkArea
 INNER JOIN Occurrence             AS occ1 
         ON occ1.parentRef = po.id_Table
-       AND occ1.subType   = 'MEWorkArea'
+       AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
 INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
 INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
 
--- Recursos hijos de la WorkArea
+-- Recursos hijos de la WorkArea (vía WorkAreaOccurrence)
 INNER JOIN WorkAreaOccurrence wao ON wao.instancedRef = war.id_Table
 INNER JOIN Occurrence occ2        ON occ2.parentRef   = wao.id_Table
 INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
@@ -181,6 +188,7 @@ OUTER APPLY (
 ) AS ta
 
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+
         //Consulta para los xml que vienen sin WorkAreaOccurrence
         private const string ConsultaA_ConWorkArea_SinWAO = @"
 SELECT
@@ -203,7 +211,7 @@ INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
 -- WorkArea hija del PR
 INNER JOIN Occurrence             AS occ1 
         ON occ1.parentRef = po.id_Table
-       AND occ1.subType   = 'MEWorkArea'
+       AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
 INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
 INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
 
@@ -249,17 +257,17 @@ OUTER APPLY (
 
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 ";
+
         //Consulta para los xml que vienen sin WorkArea
         private const string consultaB_sin_workarea = @"SELECT
     p.catalogueId   AS Padre,
     p.name          AS descripcion,
     NULL            AS centroTrabajo,          -- no hay WA
-    prod.productId  AS recurso,          -- recurso real
+    prod.productId  AS recurso,                -- recurso real
 
     uud.value               AS tiempo_segundos,
     calc.tiempo_fmt         AS tiempo,
     calc.lote_val           AS loteStd,
-    --pr_ins.sequenceNumber   AS nro_busqueda,
     op.catalogueId          AS Operacion,
     ROW_NUMBER() OVER (PARTITION BY p.catalogueId ORDER BY op.catalogueId) AS nro_recurso
 
@@ -323,10 +331,8 @@ CROSS APPLY (
         lote_val = CASE WHEN x2.t < 60 THEN 60 ELSE 1 END
 ) AS calc
 
--- Solo filas que tengan recurso
---WHERE prod.productId IS NOT NULL
-
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+
 
         //Consulta para los xml que vienen con WorkArea que apunta directo a ProductRevision
         private const string ConsultaC_WorkAreaEspecial = @"
@@ -351,7 +357,7 @@ JOIN ProcessOccurrence po
 -- MEWorkArea -> ProductRevision
 JOIN Occurrence occ_wa
        ON occ_wa.parentRef = po.id_Table
-      AND occ_wa.subType   = 'MEWorkArea'
+      AND occ_wa.subType   IN ('MEWorkArea','MEWorkarea')
 JOIN ProductRevision prod_rev
        ON prod_rev.id_Table = occ_wa.instancedRef
 JOIN Product wa_inst
@@ -393,17 +399,97 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 ";
 
 
+
+        //public static string ObtenerConsultaRecursos(SqlConnection connection)
+        //{
+        //    bool hayWorkArea = false;
+        //    bool esWorkAreaNormal = false;
+        //    bool esWorkAreaEspecial = false;
+        //    bool existeTablaWAO = false;
+
+        //    // ¿Existe físicamente la tabla WorkArea?
+        //    // Si existe, este XML tenía nodo <WorkArea>
+        //    using (var cmd = new SqlCommand(
+        //        "SELECT OBJECT_ID('WorkArea', 'U');", connection))
+        //    {
+        //        var res = cmd.ExecuteScalar();
+        //        hayWorkArea = (res != null && res != DBNull.Value);
+        //    }
+
+        //    if (hayWorkArea)
+        //    {
+        //        // Caso A: MEWorkArea -> WorkAreaRevision
+        //        using (var cmd = new SqlCommand(@"
+        //    SELECT TOP 1 1
+        //    FROM Occurrence o
+        //    JOIN WorkAreaRevision war ON war.id_Table = o.instancedRef
+        //    WHERE o.subType = 'MEWorkArea';", connection))
+        //        {
+        //            var res = cmd.ExecuteScalar();
+        //            esWorkAreaNormal = (res != null && res != DBNull.Value);
+        //        }
+
+        //        // Caso C: MEWorkArea -> ProductRevision directo
+        //        using (var cmd = new SqlCommand(@"
+        //    SELECT TOP 1 1
+        //    FROM Occurrence o
+        //    JOIN ProductRevision pr ON pr.id_Table = o.instancedRef
+        //    WHERE o.subType = 'MEWorkArea';", connection))
+        //        {
+        //            var res = cmd.ExecuteScalar();
+        //            esWorkAreaEspecial = (res != null && res != DBNull.Value);
+        //        }
+
+        //        // ¿Existe físicamente la tabla WorkAreaOccurrence?
+        //        using (var cmd = new SqlCommand(
+        //            "SELECT OBJECT_ID('WorkAreaOccurrence', 'U');", connection))
+        //        {
+        //            var res = cmd.ExecuteScalar();
+        //            existeTablaWAO = (res != null && res != DBNull.Value);
+        //        }
+        //    }
+
+        //    Utilidades.EscribirEnLog(
+        //        "ObtenerQueryRecursos -> hayWorkArea=" + hayWorkArea +
+        //        ", normal=" + esWorkAreaNormal +
+        //        ", especial=" + esWorkAreaEspecial +
+        //        ", existeWAO=" + existeTablaWAO);
+
+        //    Utilidades.EscribirEnLog("Query elegida: " +
+        //        (!hayWorkArea ? "B" :
+        //         esWorkAreaNormal && existeTablaWAO ? "A_WAO" :
+        //         esWorkAreaNormal && !existeTablaWAO ? "A_SinWAO" :
+        //         esWorkAreaEspecial ? "C" : "NINGUNA"));
+
+        //    // 🔀 Selección de consulta según combinación detectada
+
+        //    if (!hayWorkArea)
+        //        return consultaB_sin_workarea;              // sin WorkArea
+
+        //    if (esWorkAreaNormal)
+        //    {
+        //        if (existeTablaWAO)
+        //            return consultaD_workarea_recurso;      // usa WorkAreaOccurrence (A_WAO)
+        //        else
+        //            return ConsultaA_ConWorkArea_SinWAO;   // sin WorkAreaOccurrence (A_SinWAO)
+        //    }
+
+        //    if (esWorkAreaEspecial)
+        //        return ConsultaC_WorkAreaEspecial;         // MEWorkArea -> ProductRevision (C)
+
+        //    throw new Exception("No se pudo determinar el tipo de WorkArea para este XML.");
+        //}
+
         public static string ObtenerConsultaRecursos(SqlConnection connection)
         {
             bool hayWorkArea = false;
             bool esWorkAreaNormal = false;
             bool esWorkAreaEspecial = false;
             bool existeTablaWAO = false;
+            bool usaWAO = false;
 
             // ¿Existe físicamente la tabla WorkArea?
-            // Si existe, este XML tenía nodo <WorkArea>
-            using (var cmd = new SqlCommand(
-                "SELECT OBJECT_ID('WorkArea', 'U');", connection))
+            using (var cmd = new SqlCommand("SELECT OBJECT_ID('WorkArea', 'U');", connection))
             {
                 var res = cmd.ExecuteScalar();
                 hayWorkArea = (res != null && res != DBNull.Value);
@@ -411,12 +497,12 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
             if (hayWorkArea)
             {
-                // Caso A: MEWorkArea -> WorkAreaRevision
+                // Caso A/D: MEWorkArea -> WorkAreaRevision
                 using (var cmd = new SqlCommand(@"
             SELECT TOP 1 1
             FROM Occurrence o
             JOIN WorkAreaRevision war ON war.id_Table = o.instancedRef
-            WHERE o.subType = 'MEWorkArea';", connection))
+            WHERE o.subType IN ('MEWorkArea','MEWorkarea');", connection))
                 {
                     var res = cmd.ExecuteScalar();
                     esWorkAreaNormal = (res != null && res != DBNull.Value);
@@ -427,18 +513,35 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             SELECT TOP 1 1
             FROM Occurrence o
             JOIN ProductRevision pr ON pr.id_Table = o.instancedRef
-            WHERE o.subType = 'MEWorkArea';", connection))
+            WHERE o.subType IN ('MEWorkArea','MEWorkarea');", connection))
                 {
                     var res = cmd.ExecuteScalar();
                     esWorkAreaEspecial = (res != null && res != DBNull.Value);
                 }
 
-                // ¿Existe físicamente la tabla WorkAreaOccurrence?
-                using (var cmd = new SqlCommand(
-                    "SELECT OBJECT_ID('WorkAreaOccurrence', 'U');", connection))
+                // ✅ Primero verificamos si existe la tabla WorkAreaOccurrence
+                using (var cmd = new SqlCommand("SELECT OBJECT_ID('WorkAreaOccurrence', 'U');", connection))
                 {
                     var res = cmd.ExecuteScalar();
                     existeTablaWAO = (res != null && res != DBNull.Value);
+                }
+
+                // ✅ Solo si existe, preguntamos si hay datos reales (este XML/BD usa WAO)
+                if (existeTablaWAO)
+                {
+                    using (var cmd = new SqlCommand(@"
+                SELECT TOP 1 1
+                FROM WorkAreaOccurrence wao
+                JOIN Occurrence occ2 ON occ2.parentRef = wao.id_Table
+                JOIN ProductRevision pr2 ON pr2.id_Table = occ2.instancedRef;", connection))
+                    {
+                        var res = cmd.ExecuteScalar();
+                        usaWAO = (res != null && res != DBNull.Value);
+                    }
+                }
+                else
+                {
+                    usaWAO = false;
                 }
             }
 
@@ -446,29 +549,29 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                 "ObtenerQueryRecursos -> hayWorkArea=" + hayWorkArea +
                 ", normal=" + esWorkAreaNormal +
                 ", especial=" + esWorkAreaEspecial +
-                ", existeWAO=" + existeTablaWAO);
+                ", existeWAO=" + existeTablaWAO +
+                ", usaWAO=" + usaWAO);
 
             Utilidades.EscribirEnLog("Query elegida: " +
                 (!hayWorkArea ? "B" :
-                 esWorkAreaNormal && existeTablaWAO ? "A_WAO" :
-                 esWorkAreaNormal && !existeTablaWAO ? "A_SinWAO" :
+                 esWorkAreaNormal && usaWAO ? "D_WAO" :
+                 esWorkAreaNormal && !usaWAO ? "A_SinWAO" :
                  esWorkAreaEspecial ? "C" : "NINGUNA"));
 
             // 🔀 Selección de consulta según combinación detectada
-
             if (!hayWorkArea)
                 return consultaB_sin_workarea;              // sin WorkArea
 
             if (esWorkAreaNormal)
             {
-                if (existeTablaWAO)
-                    return consultaD_workarea_recurso;      // usa WorkAreaOccurrence (A_WAO)
+                if (usaWAO)
+                    return consultaD_workarea_recurso;      // usa WorkAreaOccurrence
                 else
-                    return ConsultaA_ConWorkArea_SinWAO;   // sin WorkAreaOccurrence (A_SinWAO)
+                    return ConsultaA_ConWorkArea_SinWAO;    // sin WorkAreaOccurrence
             }
 
             if (esWorkAreaEspecial)
-                return ConsultaC_WorkAreaEspecial;         // MEWorkArea -> ProductRevision (C)
+                return ConsultaC_WorkAreaEspecial;          // MEWorkArea -> ProductRevision
 
             throw new Exception("No se pudo determinar el tipo de WorkArea para este XML.");
         }
@@ -505,6 +608,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
                     while (reader.Read())
                     {
+                       
                         filas++;
                         // DEBUG: logueamos la primera fila para ver qué trae
                         if (filas <= 3)
@@ -512,7 +616,31 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                             Utilidades.EscribirEnLog(
                                 $"jsonSG2_SH3 -> fila {filas}: Padre={reader["Padre"]}, recurso={reader["recurso"]}, op={reader["Operacion"]}, tiempo={reader["tiempo"]}");
                         }
-                        string producto = reader["Padre"]?.ToString();
+                        string padrePr = reader["Padre"]?.ToString()?.Trim();
+                        if (string.IsNullOrWhiteSpace(padrePr))
+                            continue;
+
+                        // Por defecto NO recorto nada
+                        string producto = padrePr;
+
+                        // Solo recorto si realmente es "P-xxxxxx"
+                        if (padrePr.Length > 2 && padrePr.StartsWith("P-", StringComparison.OrdinalIgnoreCase))
+                        {
+                            producto = padrePr.Substring(2); // "P-012345" -> "012345"
+                        }
+
+                        // Si este PR es el que se excluyó en SG1, en SG2 debe colgar de P-xxxxxx
+                        if (Sg1Exclusions.TryGetProcessForExcludedPr(padrePr, out var procesoP) && !string.IsNullOrWhiteSpace(procesoP))
+                        {
+                            // procesoP viene "P-066650" => recorto también
+                            producto = (procesoP.Length > 2 && procesoP.StartsWith("P-", StringComparison.OrdinalIgnoreCase))
+                                ? procesoP.Substring(2)
+                                : procesoP;
+
+                            Utilidades.EscribirEnLog($"SG2_SH3 -> PR excluido detectado: {padrePr} => producto={producto}");
+                        }
+
+
                         string codigo = "01";
 
                         string tiempo = reader["tiempo"]?.ToString().Replace(',', '.');
@@ -536,20 +664,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
                         int nroRecurso = Convert.ToInt32(reader["nro_recurso"]);                     
 
-                         // Asignar operacion (incrementa por recurso)
-                        //if (!productoRecursoOperacion.ContainsKey(producto))
-                        //{
-                        //    productoRecursoOperacion[producto] = new Dictionary<string, int>();
-                        //}
-
-                        //int operacionActual = 10;
-                        //if (productoRecursoOperacion[producto].ContainsKey(recurso))
-                        //{
-                        //    operacionActual = productoRecursoOperacion[producto][recurso] + 10;
-                        //}
-                        //productoRecursoOperacion[producto][recurso] = operacionActual;
-
-                        /*string operacion = operacionActual.ToString("D2");*/ // Formato 0010, 0020, etc.
+                        
 
                         //clave unica para cada op
                         string keyProc = producto + "_" + operacion;
@@ -632,6 +747,16 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
 
                     }
+
+                    // DEBUG: contar filas por Padre real
+                    var countPorPadre = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                 
+
+                    // luego del while:
+                    foreach (var kv in countPorPadre.OrderByDescending(x => x.Value).Take(30))
+                        Utilidades.EscribirEnLog($"SG2_SH3 -> filas por Padre: {kv.Key} = {kv.Value}");
+
 
                     Utilidades.EscribirEnLog($"jsonSG2_SH3 -> filas leídas de la query: {filas}");
                     Utilidades.EscribirEnLog($"jsonSG2_SH3 -> productosDict.Count = {productosDict.Count}");
@@ -859,6 +984,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
             var lista = new List<string>(productosDict.Values);
             Console.WriteLine($"SB1_BOP -> códigos únicos: {lista.Count}");
+            Utilidades.EscribirEnLog($"SB1_BOP -> códigos únicos: {lista.Count}");
             return lista;
         }
         public class Procedimiento

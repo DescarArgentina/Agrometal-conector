@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
+using static Web_Service.SqlToJsonConverter;
 
 namespace Web_Service // Note: actual namespace depends on the project name.
 {
@@ -33,8 +34,9 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                 conn.Open();
                 BorrarTabla(conn, new Dictionary<string, TableBucket>());
             }
-            Console.WriteLine("Presione ENTER para finalizar MBOM...");
-            Console.ReadLine();
+
+            //Console.WriteLine("Presione ENTER para finalizar MBOM...");
+            //Console.ReadLine();
 
             await ProcesarBOP(connectionString);
 
@@ -200,10 +202,11 @@ ORDER BY
     PR_Codigo DESC;
 ";
 
+            Sg1Exclusions.Clear();
             var converter = new SqlToJsonConverter(connectionString);
             XmlDocument xmlDoc = new XmlDocument();
 
-            string carpetaInput = @"E:\a\Rodrigo Bertero\BOP_input";
+            string carpetaInput = @"E:\a\Rodrigo Bertero\Prueba";
             string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalBOP";
 
             if (!Directory.Exists(carpetaInput))
@@ -238,10 +241,11 @@ ORDER BY
 
                         if (ParseNode(root, groupedDataRows))
                         {
-                            Console.WriteLine("Presione ENTER para borrar tablas...");
-                            Console.ReadLine();
+                           
+                            //Console.ReadLine();
                             if (borrarTablas)
                             {
+                                //Console.WriteLine("Presione ENTER para borrar tablas...");
                                 BorrarTabla(connection, groupedDataRows);
                                 borrarTablas = false;
                             }
@@ -266,25 +270,26 @@ ORDER BY
                             foreach (string s in listaSB1_BOP)
                             {
                                 Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
-                                //await Tabla_SB1.postSB1(s);
+                                await Tabla_SB1.postSB1(s);
                             }
 
                             // SG1 (estructuras de la BOP)
                             Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
                             var estructurasMBOM = Tabla_SG1.jsonSG1_BOP();
-                            Console.WriteLine(estructurasMBOM);
+                            //Console.WriteLine(estructurasMBOM);
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
 
-                            //await Tabla_SG1.postSG1(estructurasMBOM);
+                            await Tabla_SG1.postSG1(estructurasMBOM);
                             Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
 
 
 
                             // SG2/SH3 (procesos)
                             var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
-                            foreach (string s in listaSG2) { 
-                                //await Tablas_SG2_SH3.EnviarSG2_SH3(s);
-                                Console.WriteLine("-- sg2/sh3 --");
+                            foreach (string s in listaSG2)
+                            {
+                                await Tablas_SG2_SH3.EnviarSG2_SH3(s);
+                                Console.WriteLine("-- sg2/sh3 --"); 
                                 Console.WriteLine(s);
                             }
 
@@ -354,11 +359,11 @@ ORDER BY
 
                         if (ParseNode(root, groupedDataRows))
                         {
-                            Console.WriteLine("Presione ENTER para borrar tablas...");
-                            Console.ReadLine();
+                            //Console.WriteLine("Presione ENTER para borrar tablas...");
+                            //Console.ReadLine();
                             if (borrarTablas)
                             {
-                                //BorrarTabla(connection, groupedDataRows);
+                                BorrarTabla(connection, groupedDataRows);
                                 borrarTablas = false;
                                 Console.WriteLine("Borrando tablas");
                             }
@@ -371,23 +376,24 @@ ORDER BY
                             var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
                             Console.WriteLine("Presione ENTER para finalizar SB1...");
-                            Console.ReadLine();
+                            //Console.ReadLine();
 
-                            //foreach (string s in listaSB1_MBOM)
-                            //{
-                            //    Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
-                            //    await Tabla_SB1.postSB1(s);
-                            //}
+                            foreach (string s in listaSB1_MBOM)
+                            {
+                                Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                                await Tabla_SB1.postSB1(s);
+                            }
 
                             // --- ESTRUCTURAS TABLA SG1 
                             Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
                             var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+                            Console.WriteLine($"[JSON MBOM] {estructurasMBOM}");
 
-                            //await Tabla_SG1.postSG1(estructurasMBOM);
+                            await Tabla_SG1.postSG1(estructurasMBOM);
                             Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
                             Console.WriteLine("Presione ENTER para finalizar SG1...");
-                            Console.ReadLine();
+                            //Console.ReadLine();
 
                             // Mover procesado
                             string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
@@ -479,7 +485,6 @@ ORDER BY
         {
             var listaIgnorados = new List<string> {
         "ApplicationRef", "AttributeContext",
-        "ExternalFile", "Folder",
         "RevisionRule", "Site", "Transform", "View"
     };
 
