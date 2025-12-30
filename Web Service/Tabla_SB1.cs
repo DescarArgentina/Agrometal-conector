@@ -129,8 +129,8 @@ namespace Web_Service
         }
         public static List<string> jsonSB1_BOP()
         {
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"
 WITH CTE_Hierarchy AS (
 SELECT
@@ -506,10 +506,10 @@ Codigo_Hijo DESC;
             var jsonProductos = new List<string>();
             foreach (var kvp in productosDict)
             {
-                Console.WriteLine("-- sb1 unico --");
-                Console.WriteLine($"[SB1 JSON FINAL] codigo={kvp.Key}");
-                Console.WriteLine(kvp.Value);
-                Utilidades.EscribirEnLog("-- sb1 unico --");
+                //Console.WriteLine("-- sb1 unico --");
+                //Console.WriteLine($"[SB1 JSON FINAL] codigo={kvp.Key}");
+                //Console.WriteLine(kvp.Value);
+                //Utilidades.EscribirEnLog("-- sb1 unico --");
                 Utilidades.EscribirEnLog($"[SB1 JSON FINAL] codigo={kvp.Key}");
                 Utilidades.EscribirEnLog(kvp.Value);
                 jsonProductos.Add(kvp.Value);
@@ -522,8 +522,8 @@ Codigo_Hijo DESC;
 
         public static List<string> jsonSB1_MBOM()
         {
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"
 WITH CTE_Hierarchy AS (
     SELECT DISTINCT
@@ -824,8 +824,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                          Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = "  INSERT INTO SB1 (codigo, descripcion, tipo, deposito, unMedida, revision, estado, mensaje)\r\nSELECT @codigo, @descripcion, @tipo, @deposito, @unMedida, @revision, @estado, @mensaje\r\nWHERE NOT EXISTS (SELECT 1 FROM SB1 WHERE codigo = @codigo)";
             try
             {
@@ -860,8 +860,8 @@ ORDER BY b.Process_codigo;
             //                          Integrated Security=True;TrustServerCertificate=True";
 
             //string connectionString = "Server=10.0.0.109,1433;Database=AgrometalBOP;User Id=chaco;Password=Descar_2020;";
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"UPDATE SB1
                           SET estado = @estado, mensaje = @mensaje
                           WHERE codigo = @codigo AND descripcion = @descripcion 
