@@ -483,8 +483,8 @@ ORDER BY
                     string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
 
                     // LOG: preview del JSON
-                    Console.WriteLine($"[SG1-POST] JSON generado para producto {producto} (primeros 800 caracteres):");
-                    Console.WriteLine(jsonData.Length > 800 ? jsonData.Substring(0, 800) + "..." : jsonData);
+                    //Console.WriteLine($"[SG1-POST] JSON generado para producto {producto} (primeros 800 caracteres):");
+                    //Console.WriteLine(jsonData.Length > 800 ? jsonData.Substring(0, 800) + "..." : jsonData);
 
                     // Si quisieras ver TODO el JSON, ya lo tenés arriba, solo ojo con el volumen.
                     Utilidades.EscribirEnLog($"[SG1-POST] JSON COMPLETO para producto {producto}:\n{jsonData}");
@@ -595,9 +595,9 @@ ORDER BY
 
                     Console.WriteLine($"[SG1-POST-UNIT] Código del producto: {codigo}");
                     Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Código del producto: {codigo}");
-                    Console.WriteLine("[SG1-POST-UNIT] JSON a enviar (primeros 800 caracteres):");
-                    Console.WriteLine(jsonString.Length > 800 ? jsonString.Substring(0, 800) + "..." : jsonString);
-
+                    //Console.WriteLine("[SG1-POST-UNIT] JSON a enviar (primeros 800 caracteres):");
+                    //Console.WriteLine(jsonString.Length > 800 ? jsonString.Substring(0, 800) + "..." : jsonString);
+                    Utilidades.EscribirEnLog(jsonString);
                     int statusCode = 0;
                     string responseData = string.Empty;
 
@@ -656,6 +656,7 @@ ORDER BY
             if (esAcumuladorPropio && putAcumulador.Count > 0)
             {
                 Console.WriteLine($"[SG1-POST-UNIT] Ejecutando PUT masivo (desde postSG1(string)) para {putAcumulador.Count} productos.");
+                Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Ejecutando PUT masivo (desde postSG1(string)) para {putAcumulador.Count} productos.");
                 await putSG1(putAcumulador);
             }
         }
@@ -680,8 +681,8 @@ ORDER BY
         }
         public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP()
         {
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             // ✅ Elegir query según compatibilidad del XML/BD
             string queryElegida;
             using (var conn = new SqlConnection(connectionString))
@@ -885,8 +886,8 @@ ORDER BY
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             Console.WriteLine("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
             Utilidades.EscribirEnLog("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
 
@@ -1130,7 +1131,7 @@ ORDER BY b.Process_codigo;
                                         // usamos el código del hijo como código de padre lógico
                                         parentCodigo = childCodigo;
                                         esFilaRaiz = true;
-                                        Console.WriteLine($"[SG1-JSON] Fila raíz detectada → ParentCodigo={parentCodigo}, ChildCodigo={childCodigo}");
+                                        //Console.WriteLine($"[SG1-JSON] Fila raíz detectada → ParentCodigo={parentCodigo}, ChildCodigo={childCodigo}");
                                         Utilidades.EscribirEnLog($"[SG1-JSON] Fila raíz detectada → ParentCodigo={parentCodigo}, ChildCodigo={childCodigo}");
                                     }
                                     else
@@ -1179,12 +1180,13 @@ ORDER BY b.Process_codigo;
                                 // ✅ ACÁ: cuando ya está todo armado (después del foreach dataByParent)
                                 string json = JsonConvert.SerializeObject(estructuras, Formatting.Indented);
 
-                                Console.WriteLine("[JSON MBOM]");
-                                Console.WriteLine(json);
-
+                                //Console.WriteLine("[JSON MBOM]");
+                                //Console.WriteLine(json);
+                                Utilidades.EscribirEnLog("[JSON MBOM]");
+                                Utilidades.EscribirEnLog(json);
                                 // (opcional) a archivo para no saturar consola
-                                File.WriteAllText("mbom_debug.json", json);
-                                Console.WriteLine("[MBOM] Dump a mbom_debug.json");
+                                //File.WriteAllText("mbom_debug.json", json);
+                                //Console.WriteLine("[MBOM] Dump a mbom_debug.json");
 
                                 // Recolección de variantes (si la usás)
                                 foreach (var child in children)
@@ -1352,7 +1354,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                    Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = "INSERT INTO SG1 VALUES (@Nombre_Padre, @Codigo_Padre, @Nombre_Hijo, @Codigo_Hijo, @CantidadHijo, NULL, NULL)";
             try
             {
@@ -1382,7 +1385,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                    Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"UPDATE SG1
                      SET estado = @estado, mensaje = @mensaje
                      WHERE Codigo_Padre = @codigo";

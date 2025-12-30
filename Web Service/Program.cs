@@ -21,33 +21,61 @@ namespace Web_Service // Note: actual namespace depends on the project name.
 
         static async Task Main(string[] args)
         {
-            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-            //                    Integrated Security=True;TrustServerCertificate=True";
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            // 1) Validación de parámetros
+            if (args == null || args.Length < 4)
+            {
+                Console.WriteLine("Uso:");
+                Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
+                Console.WriteLine("Ejemplo:");
+                Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            string mbomInput = Path.GetFullPath(args[0]);
+            string mbomProcesada = Path.GetFullPath(args[1]);
+            string bopInput = Path.GetFullPath(args[2]);
+            string bopProcesada = Path.GetFullPath(args[3]);
+
+            Utilidades.InicializarLogPorMbom(mbomInput);
+            Utilidades.EscribirEnLog($"Inicio ScriptPrincipal. MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
 
 
-            await ProcesarMBOM(connectionString);
+            // 2) Validación/creación de carpetas (mínimo)
+            if (!Directory.Exists(mbomInput))
+            {
+                Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
+                Environment.ExitCode = 2;
+                return;
+            }
+            if (!Directory.Exists(bopInput))
+            {
+                Console.WriteLine($"No existe BOP_Input: {bopInput}");
+                Environment.ExitCode = 3;
+                return;
+            }
 
-            // 🔹 Limpiamos la base ANTES de empezar con BOP
+            // Estas dos normalmente las crea el monitor, pero las garantizamos igual:
+            Directory.CreateDirectory(mbomProcesada);
+            Directory.CreateDirectory(bopProcesada);
+
+            // 3) ConnectionString (igual que hoy)
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            // 4) Procesar MBOM con rutas dinámicas
+            await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
+
+            // 5) Limpiar BD ANTES de BOP (igual que hoy)
             using (SqlConnection conn = new SqlConnection(connectionString))
             {
                 conn.Open();
                 BorrarTabla(conn, new Dictionary<string, TableBucket>());
             }
 
-            //Console.WriteLine("Presione ENTER para finalizar MBOM...");
-            //Console.ReadLine();
-
-            await ProcesarBOP(connectionString);
-
-
-
-            //var estructurasMBOM = Tabla_SG1.pruebaBOP();
-            //Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
-
-            //await Tabla_SG1.postSG1(estructurasMBOM);
-            //Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
+            // 6) Procesar BOP con rutas dinámicas
+            await ProcesarBOP(connectionString, bopInput, bopProcesada);
         }
+
 
         public class TableBucket
         {
@@ -62,7 +90,8 @@ namespace Web_Service // Note: actual namespace depends on the project name.
             // Todos los nodos XML de esta tabla (cada ocurrencia)
             public List<XmlNode> Nodes { get; } = new List<XmlNode>();
         }
-        private static async Task ProcesarBOP(string connectionString)
+        private static async Task ProcesarBOP(string connectionString, string carpetaInput, string carpetaProcesados)
+
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO BOP ===");
 
@@ -206,19 +235,15 @@ ORDER BY
             var converter = new SqlToJsonConverter(connectionString);
             XmlDocument xmlDoc = new XmlDocument();
 
-            string carpetaInput = @"E:\a\Rodrigo Bertero\Prueba";
-            string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalBOP";
+            //string carpetaInput = @"E:\a\Rodrigo Bertero\Prueba";
+            //string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalBOP";
 
             if (!Directory.Exists(carpetaInput))
             {
                 Console.WriteLine("No existe carpeta BOP_input");
                 return;
             }
-            if (!Directory.Exists(carpetaProcesados))
-            {
-                Console.WriteLine("No existe carpetaProcesados");
-                return;
-            }
+            Directory.CreateDirectory(carpetaProcesados);
 
             string[] archivos = Directory.GetFiles(carpetaInput);
             int contadorXmls = 1;
@@ -285,17 +310,19 @@ ORDER BY
 
 
                             // SG2/SH3 (procesos)
+                            Console.WriteLine("[BOP] Generando SG2/SH3 (Procesos Productivos) desde BOP...");
                             var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
                             foreach (string s in listaSG2)
                             {
                                 await Tablas_SG2_SH3.EnviarSG2_SH3(s);
-                                Console.WriteLine("-- sg2/sh3 --"); 
-                                Console.WriteLine(s);
+
+                                //Console.WriteLine(s);
+                                Utilidades.EscribirEnLog(s);
                             }
 
 
                             // Mostrar la estructura
-                            Console.WriteLine("=============================");
+                            //Console.WriteLine("=============================");
                             //converter.ShowBOMTree(sqlQuery);
 
                             // JSONs jerárquicos
@@ -303,12 +330,12 @@ ORDER BY
                             //converter.ProcessHierarchicalJsons(sqlQuery);
 
                             var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
-                            Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
+                            //Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
 
                             for (int i = 0; i < jsonStrings.Count; i++)
                             {
-                                Console.WriteLine($"\nJSON #{i + 1}:");
-                                Console.WriteLine(jsonStrings[i]);
+                                //Console.WriteLine($"\nJSON #{i + 1}:");
+                                //Console.WriteLine(jsonStrings[i]);
                             }
 
 
@@ -324,20 +351,23 @@ ORDER BY
             }
         }
 
-        private static async Task ProcesarMBOM(string connectionString)
+        private static async Task ProcesarMBOM(string connectionString, string carpetaInput, string carpetaProcesados)
+
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO MBOM ===");
 
             XmlDocument xmlDoc = new XmlDocument();
 
-            string carpetaInput = @"E:\a\Rodrigo Bertero\MBOM_input";
-            string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalMBOM";
+            //string carpetaInput = @"E:\a\Rodrigo Bertero\MBOM_input";
+            //string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalMBOM";
 
             if (!Directory.Exists(carpetaInput))
             {
                 Console.WriteLine("No existe carpeta MBOM_input");
                 return;
             }
+            Directory.CreateDirectory(carpetaProcesados);
+
 
             string[] archivos = Directory.GetFiles(carpetaInput);
             int contadorXmls = 1;
@@ -375,7 +405,7 @@ ORDER BY
                             Console.WriteLine("[MBOM] Generando SB1...");
                             var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
-                            Console.WriteLine("Presione ENTER para finalizar SB1...");
+                            //Console.WriteLine("Presione ENTER para finalizar SB1...");
                             //Console.ReadLine();
 
                             foreach (string s in listaSB1_MBOM)
@@ -388,11 +418,11 @@ ORDER BY
                             Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
                             var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
                             Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
-                            Console.WriteLine($"[JSON MBOM] {estructurasMBOM}");
+                            //Console.WriteLine($"[JSON MBOM] {estructurasMBOM}");
 
                             await Tabla_SG1.postSG1(estructurasMBOM);
                             Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
-                            Console.WriteLine("Presione ENTER para finalizar SG1...");
+                            //Console.WriteLine("Presione ENTER para finalizar SG1...");
                             //Console.ReadLine();
 
                             // Mover procesado
@@ -470,13 +500,13 @@ ORDER BY
                     cmd.ExecuteNonQuery();
                 }
 
-                Utilidades.EscribirEnLog("✔ Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
-                Console.WriteLine("✔ Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
+                Utilidades.EscribirEnLog("Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
+                Console.WriteLine("Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
             }
             catch (Exception ex)
             {
-                Utilidades.EscribirEnLog($"❌ Error al intentar eliminar tablas: {ex.Message}");
-                Console.WriteLine($"❌ Error al intentar eliminar tablas: {ex.Message}");
+                Utilidades.EscribirEnLog($"Error al intentar eliminar tablas: {ex.Message}");
+                Console.WriteLine($"Error al intentar eliminar tablas: {ex.Message}");
             }
         }
 

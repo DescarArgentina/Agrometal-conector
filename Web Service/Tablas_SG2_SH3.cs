@@ -583,8 +583,8 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                          Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
 
             List<string> jsonProductos = new List<string>();
             Utilidades.EscribirEnLog("jsonSG2_SH3 -> entrando al método");
@@ -788,8 +788,8 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                            Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             // 1) Batch para endurecer el esquema (idempotente)
             const string schemaPatch = @"
                                         SET NOCOUNT ON;
