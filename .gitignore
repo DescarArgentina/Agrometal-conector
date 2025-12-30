@@ -3,7 +3,7 @@
 *.user
 *.suo
 
-# Build outputs
+# Build outputs (de cualquier proyecto .NET)
 bin/
 obj/
 
