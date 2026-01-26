@@ -1,14 +1,16 @@
-﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Diagnostics;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Web_Service
 {
@@ -26,10 +28,90 @@ namespace Web_Service
     public class Tabla_SG1
     {
         private readonly HttpClient _httpClient;
+        private const string SG1_POST_URL = "http://119.8.73.193:8096/rest/TCEstructura/Incluir/";
+        private const string SG1_PUT_URL = "http://119.8.73.193:8096/rest/TCEstructura/Modificar/";
+        private const string USERNAME = "USERREST";
+        private const string PASSWORD = "restagr";
 
+        private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
+
+        private static readonly HttpClient _clientSG1 = CreateHttpClient();
+
+        private static HttpClient CreateHttpClient()
+        {
+            var client = new HttpClient
+            {
+                Timeout = TimeSpan.FromMinutes(3) // ajustá si Protheus tarda más
+            };
+
+            var credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{USERNAME}:{PASSWORD}"));
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+
+            return client;
+        }
+
+        private static bool IsRetryableStatus(HttpStatusCode code)
+            => (int)code >= 500 && (int)code <= 599;
+
+        private static bool IsRetryableException(Exception ex)
+            => ex is HttpRequestException
+            || ex is TaskCanceledException
+            || ex is IOException;
         // Productos que en la query original venían sin Codigo_Padre
         private static readonly HashSet<string> ProductosSinCodigoPadre =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class WsError
+        {
+            public int? errorCode { get; set; }
+            public string errorMessage { get; set; }
+        }
+
+        private static bool TryParseWsError(string body, out int? errorCode, out string errorMessage)
+        {
+            errorCode = null;
+            errorMessage = null;
+
+            if (string.IsNullOrWhiteSpace(body))
+                return false;
+
+            try
+            {
+                // Caso típico: {"errorCode":10,"errorMessage":"..."}
+                var err = JsonConvert.DeserializeObject<WsError>(body);
+                if (err?.errorCode != null)
+                {
+                    errorCode = err.errorCode;
+                    errorMessage = err.errorMessage;
+                    return true;
+                }
+
+                // Fallback: JObject (por si viene otra estructura)
+                var j = JObject.Parse(body);
+                var codeToken = j["errorCode"];
+                if (codeToken != null && int.TryParse(codeToken.ToString(), out var code))
+                {
+                    errorCode = code;
+                    errorMessage = j["errorMessage"]?.ToString();
+                    return true;
+                }
+            }
+            catch
+            {
+                // body no es JSON o no tiene el schema esperado
+            }
+
+            return false;
+        }
+
+        private static void LogErrorProtheusIfAny(string tabla, string metodo, string producto, string responseBody)
+        {
+            if (TryParseWsError(responseBody, out var code, out var msg))
+            {
+                Utilidades.EscribirErrorProtheus(tabla, metodo, producto, code, msg);
+            }
+        }
+
         public Tabla_SG1()
         {
             _httpClient = new HttpClient();
@@ -72,11 +154,17 @@ ValidChildren AS (
         ON pr.masterRef = p.id_Table
     LEFT JOIN ProcessOccurrence po
         ON po.instancedRef = pr.id_Table
-    LEFT JOIN ProcessOccurrence po_op
-        ON po_op.parentRef = po.id_Table
-    LEFT JOIN Occurrence o
-        ON o.parentRef = po_op.id_Table
-       AND o.subType NOT IN ('METool')
+LEFT JOIN ProcessOccurrence po_op
+    ON po_op.parentRef = po.id_Table
+   AND po_op.idXml = po.idXml
+
+LEFT JOIN Occurrence o
+    ON (
+        o.parentRef = po.id_Table
+        OR o.parentRef = po_op.id_Table
+    )
+   AND o.idXml = po.idXml
+   AND ISNULL(o.subType,'') <> 'METool'
     LEFT JOIN ProductRevision prod_rev
         ON prod_rev.id_Table = o.instancedRef
     LEFT JOIN Product prod
@@ -88,7 +176,7 @@ ValidChildren AS (
     WHERE
         prod.productId IS NOT NULL
         AND NOT (
-            prod_rev.subType = 'Mfg0MEFactoryToolRevision'
+            prod_rev.subType IN ('Mfg0MEFactoryToolRevision', 'Mfg0MEResourceRevision')
             OR
             (
                 prod_rev.subType IN ('Agm4_MatPrimaRevision','Agm4_RepCompradoRevision')
@@ -182,218 +270,149 @@ ORDER BY
     LEFT(p.catalogueId, 3) DESC;
 ";
         // ✅ Query alternativa: sin WorkArea / WorkAreaRevision / OUTER APPLY
+        // ✅ Query alternativa: SIN WorkArea (pero con el MISMO schema que espera SqlToJsonConverter)
         private const string consultaSG1_BOP_SinWorkArea = @"
-WITH CTE_Hierarchy AS (
-    SELECT DISTINCT
-        o.id_Table,
-        pr.name,
+WITH FirstProcessName AS (
+    SELECT TOP (1)
         CASE 
-            WHEN LEFT(p.catalogueId, 2) = 'P-'
-                THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
-            ELSE p.catalogueId
-        END AS catalogueId,
-        CAST(o.parentRef AS INT) AS parentRef,
-        pr.revision,
-        pr.subType,
-        o.idXml,
-
-        -- columnas alineadas con SB1
-        'PA' AS Tipo,
-        '01' AS Deposito,
-        CASE
-            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
-            ELSE 'UN'
-        END AS unMedida
-    FROM ProcessOccurrence o
-    INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
-    INNER JOIN Process p          ON pr.masterRef   = p.id_Table
-
-    -- Unidad de medida
-    LEFT JOIN Form fUnidad
-        ON p.catalogueId = CASE
-            WHEN CHARINDEX('/', fUnidad.name) > 0
-                THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
-            ELSE fUnidad.name
-        END
-    LEFT JOIN UserValue_UserData uudUnidad
-        ON fUnidad.id_Table + 9 = uudUnidad.id_Father
-       AND p.idXml = uudUnidad.idXml
+            WHEN LEN(p.catalogueId) != 8 THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+            ELSE RIGHT(p.catalogueId, 6) 
+        END AS first_process_name
+    FROM Process p
+    LEFT JOIN ProcessRevision pr
+        ON pr.masterRef = p.id_Table
+    LEFT JOIN ProcessOccurrence po
+        ON pr.id_Table = po.instancedRef
+    WHERE po.parentRef IS NULL
 ),
-CTE_Niveles AS (
-    -- Nivel 0 (raíces)
+ValidChildren AS (
     SELECT
-        h.*,
-        0 AS Nivel
-    FROM CTE_Hierarchy h
-    WHERE h.parentRef IS NULL OR h.parentRef = 0
-
-    UNION ALL
-
-    -- Niveles siguientes
-    SELECT
-        h.*,
-        n.Nivel + 1
-    FROM CTE_Hierarchy h
-    INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
-)
-
--- PRIMERA PARTE: jerarquía de procesos / PR
-SELECT
-    COALESCE(Parent.name, '')        AS Nombre_Padre,
-    COALESCE(Parent.catalogueId, '') AS Process_codigo,
-
-    CASE
-        WHEN LEFT(Child.catalogueId, 2) = 'PR'
-            THEN Child.name + ' - Proceso: ' + COALESCE(Parent.catalogueId, '')
-        ELSE Child.name
-    END AS Nombre_Hijo,
-
-    Child.catalogueId  AS Codigo_Hijo,
-    Child.subType      AS Subtype_Hijo,
-    Child.revision     AS Revision,
-    1                  AS CantidadHijo_Total,
-    nChild.Nivel       AS Nivel,
-
-    -- Tipo calculado (SIN WorkArea)
-    CASE
-        -- PR de servicio explícito: PRxxxxxT
-        WHEN LEFT(Child.catalogueId, 2) = 'PR'
-         AND RIGHT(Child.catalogueId, 1) = 'T'
-            THEN 'SV'
-
-        -- Comprado o materia prima
-        WHEN Child.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
-            THEN 'MP'
-
-        -- Producto intermedio (PR)
-        WHEN LEFT(Child.catalogueId, 2) = 'PR'
-            THEN 'PI'
-
-        -- Default
-        ELSE 'PA'
-    END AS Tipo,
-
-    Child.Deposito,
-    Child.unMedida
-FROM CTE_Niveles nChild
-LEFT JOIN CTE_Niveles  nParent ON nChild.parentRef = nParent.id_Table
-LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
-LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
-
-UNION ALL
-
--- SEGUNDA PARTE: MEConsumed + MEResource (SIN WorkArea)
-SELECT
-    -- Para recurso, el ""padre"" lógico es el PR (nombre del proceso PR).
-    -- Para consumed, el padre lógico sigue siendo la Operación.
-    CASE 
-        WHEN occ.subType = 'MEResource' THEN prPR.name
-        ELSE Operation.name
-    END AS Nombre_Padre,
-
-    pPR.catalogueId AS Process_codigo,
-
-    CASE
-        WHEN LEFT(x.CodigoNorm, 2) = 'PR'
-            THEN p.name + ' - Proceso: ' + COALESCE(pPR.catalogueId, '')
-        ELSE p.name
-    END AS Nombre_Hijo,
-
-    x.CodigoNorm AS Codigo_Hijo,
-
-    pr.subType   AS Subtype_Hijo,
-    pr.revision  AS Revision,
-    COUNT(p.productId) AS CantidadHijo_Total,
-    3            AS Nivel,
-
-    CASE
-        WHEN LEFT(x.CodigoNorm, 2) = 'PR'
-         AND RIGHT(x.CodigoNorm, 1) = 'T'
-            THEN 'SV'
-        WHEN pr.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
-            THEN 'MP'
-        WHEN LEFT(x.CodigoNorm, 2) = 'PR'
-            THEN 'PI'
-        ELSE 'PA'
-    END AS Tipo,
-
-    '01' AS Deposito,
-
-    MAX(
+        po.id_Table AS PR_OccId,
         CASE
-            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
-            ELSE 'UN'
-        END
-    ) AS unMedida
+            WHEN LEFT(prod.productId, 1) IN ('M','E')
+                THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
+            WHEN RIGHT(prod.productId, 3) = '-FV'
+                THEN LEFT(prod.productId, LEN(prod.productId) - 3)
+            ELSE prod.productId
+        END AS Codigo,
+        prod_rev.subType AS subType,
+        CASE
+            WHEN prod.productId IS NULL THEN 0
+            WHEN prod_rev.subType IN ('Agm4_MatPrimaRevision', 'Agm4_RepCompradoRevision')
+                THEN ISNULL(
+                        TRY_CAST(NULLIF(LTRIM(RTRIM(uv_qty.value)), '') AS FLOAT),
+                        0
+                     )
+            ELSE 1
+        END AS Qty
+    FROM Process p
+    LEFT JOIN ProcessRevision pr
+        ON pr.masterRef = p.id_Table
+    LEFT JOIN ProcessOccurrence po
+        ON po.instancedRef = pr.id_Table
 
-FROM Occurrence occ
-INNER JOIN ProductRevision pr ON pr.id_Table = occ.instancedRef
-INNER JOIN Product p          ON p.id_Table  = pr.masterRef
+    -- Operaciones colgando del PR
+    LEFT JOIN ProcessOccurrence po_op
+        ON po_op.parentRef = po.id_Table
+       AND po_op.idXml = po.idXml
 
--- o = ProcessOccurrence al que cuelga la Occurrence (para consumed: operación, para resource: PR)
-LEFT JOIN ProcessOccurrence o 
-       ON occ.parentRef = o.id_Table
+    -- Consumidos/Recursos colgando del PR u operación
+    LEFT JOIN Occurrence o
+        ON (
+            o.parentRef = po.id_Table
+            OR o.parentRef = po_op.id_Table
+        )
+       AND o.idXml = po.idXml
+       AND ISNULL(o.subType,'') <> 'METool'
 
--- Operación (solo aplica bien cuando occ = MEConsumed)
-LEFT JOIN OperationRevision op ON op.id_Table = o.instancedRef
-LEFT JOIN Operation          ON Operation.id_Table = op.masterRef
+    LEFT JOIN ProductRevision prod_rev
+        ON prod_rev.id_Table = o.instancedRef
+    LEFT JOIN Product prod
+        ON prod.id_Table = prod_rev.masterRef
+    LEFT JOIN UserValue_UserData uv_qty
+        ON uv_qty.id_Father = o.id_Table + 2
+       AND uv_qty.title = 'Quantity'
+       AND uv_qty.idXml  = o.idXml
+    WHERE
+    prod.productId IS NOT NULL
+    AND prod_rev.subType NOT IN ('Mfg0MEResourceRevision', 'Mfg0MEFactoryToolRevision')
+    AND NOT (
+        prod_rev.subType = 'Mfg0MEFactoryToolRevision'
+        OR (
+            prod_rev.subType IN ('Agm4_MatPrimaRevision','Agm4_RepCompradoRevision')
+            AND (
+                uv_qty.value IS NULL
+                OR LTRIM(RTRIM(uv_qty.value)) = ''
+                OR TRY_CAST(NULLIF(LTRIM(RTRIM(uv_qty.value)),'') AS FLOAT) = 0
+            )
+        )
+    )
+)
+SELECT
+    fpn.first_process_name AS Process_codigo,
 
--- o2 = padre de o (para consumed: PR; para resource: Root)
-LEFT JOIN ProcessOccurrence o2 ON o2.id_Table = o.parentRef
+    CASE
+        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+        ELSE p.catalogueId
+    END AS PR_Codigo,
 
--- Elegimos el ProcessOccurrence del PR según subtype:
--- - MEConsumed  -> PR = o2
--- - MEResource  -> PR = o
-LEFT JOIN ProcessOccurrence poPR
-       ON poPR.id_Table = CASE 
-                             WHEN occ.subType = 'MEResource' THEN o.id_Table
-                             ELSE o2.id_Table
-                           END
+    vc.Codigo AS Codigo,
+    SUM(ISNULL(vc.Qty, 0)) AS Cantidad,
+    vc.subType AS subType,
 
-LEFT JOIN ProcessRevision prPR ON poPR.instancedRef = prPR.id_Table
-LEFT JOIN Process         pPR  ON prPR.masterRef    = pPR.id_Table
+    uud2.value AS num_busqueda,
 
--- Unidad de medida (del PR)
-LEFT JOIN Form fUnidad2
-    ON pPR.catalogueId = CASE
-        WHEN CHARINDEX('/', fUnidad2.name) > 0
-            THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
-        ELSE fUnidad2.name
+    -- 🔒 Mantengo columnas WA para que el converter no explote (aunque no existan tablas WA)
+    NULL AS WorkArea_CatalogueId,
+    NULL AS WorkArea_Nombre,
+    NULL AS WorkArea_Revision
+
+FROM Process p
+LEFT JOIN ProcessRevision pr
+    ON pr.masterRef = p.id_Table
+LEFT JOIN ProcessOccurrence po
+    ON po.instancedRef = pr.id_Table
+
+LEFT JOIN UserValue_UserData uud2
+    ON uud2.id_Father = po.id_Table + 2
+   AND uud2.title = 'SequenceNumber'
+   AND uud2.idXml  = po.idXml
+
+LEFT JOIN ValidChildren vc
+    ON vc.PR_OccId = po.id_Table
+
+CROSS JOIN FirstProcessName fpn
+
+WHERE
+    fpn.first_process_name <>
+    CASE
+        WHEN LEFT(p.catalogueId, 1) IN ('M','E')
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
+        WHEN RIGHT(p.catalogueId, 3) = '-FV'
+            THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
+        WHEN LEFT(p.catalogueId, 2) = 'P-'
+            THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+        ELSE p.catalogueId
     END
-LEFT JOIN UserValue_UserData uudUnidad2
-    ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
-   AND pPR.idXml = uudUnidad2.idXml
 
--- Código hijo normalizado
-CROSS APPLY (
-    SELECT CASE
-        WHEN LEFT(p.productId, 1) = 'E'
-            THEN RIGHT(p.productId, LEN(p.productId) - 1)
-        ELSE p.productId
-    END AS CodigoNorm
-) AS x
-
-WHERE occ.subType IN ('MEConsumed', 'MEResource')
 
 GROUP BY
-    occ.subType,
-    Operation.name,
-    prPR.name,
-    pPR.catalogueId,
-    p.name,
-    x.CodigoNorm,
-    pr.subType,
-    pr.revision
+    fpn.first_process_name,
+    p.catalogueId,
+    vc.Codigo,
+    vc.subType,
+    uud2.value
+
 ORDER BY
-    Nivel,
-    Codigo_Hijo DESC;
+    num_busqueda DESC,
+    LEFT(p.catalogueId, 3) DESC;
 ";
+
 
         private static string ObtenerConsultaSG1_BOP(SqlConnection connection)
         {
@@ -450,97 +469,118 @@ ORDER BY
 
         public static async Task postSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
         {
-            string url = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
-            string username = "USERREST";
-            string password = "restagr";
-
             var putFallBack = new Dictionary<string, List<List<Dictionary<string, string>>>>();
 
             Console.WriteLine($"[SG1-POST] Iniciando envío masivo a Totvs. Cantidad de productos: {estructuras.Count}");
             Utilidades.EscribirEnLog($"[SG1-POST] Iniciando envío masivo a Totvs. Cantidad de productos: {estructuras.Count}");
 
-            using (HttpClient client = new HttpClient())
+            foreach (var parent in estructuras)
             {
-                var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+                string producto = parent.Key;
+                int cantItems = parent.Value?.Count ?? 0;
 
-                foreach (var parent in estructuras)
+                Console.WriteLine($"[SG1-POST] Preparando envío para producto {producto} con {cantItems} ítems de estructura...");
+
+                var jsonBody = new
                 {
-                    string producto = parent.Key;
-                    int cantItems = parent.Value?.Count ?? 0;
+                    producto = producto,
+                    qtdBase = "1",
+                    estructura = parent.Value
+                };
 
-                    Console.WriteLine($"[SG1-POST] Preparando envío para producto {producto} con {cantItems} ítems de estructura...");
+                string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
 
+                // Log JSON completo (ojo volumen)
+                Utilidades.EscribirJSONEnLog($"[SG1-POST] JSON COMPLETO para producto {producto}:\n{jsonData}");
 
-                    var jsonBody = new
-                    {
-                        producto = producto,
-                        qtdBase = "1",
-                        estructura = parent.Value
-                    };
+                // Obtener código
+                JObject obj = JObject.Parse(jsonData);
+                string? codigo = obj["producto"]?.ToString();
 
-                    string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
+                if (string.IsNullOrEmpty(codigo))
+                {
+                    Console.WriteLine("[SG1-POST] ERROR: No se pudo obtener el código del producto, se omite este envío.");
+                    continue;
+                }
 
-                    // LOG: preview del JSON
-                    //Console.WriteLine($"[SG1-POST] JSON generado para producto {producto} (primeros 800 caracteres):");
-                    //Console.WriteLine(jsonData.Length > 800 ? jsonData.Substring(0, 800) + "..." : jsonData);
+                Console.WriteLine($"[SG1-POST] Enviando POST para producto {codigo}...");
+                Utilidades.EscribirEnLog($"[SG1-POST] Enviando POST para producto {codigo}...");
 
-                    // Si quisieras ver TODO el JSON, ya lo tenés arriba, solo ojo con el volumen.
-                    Utilidades.EscribirEnLog($"[SG1-POST] JSON COMPLETO para producto {producto}:\n{jsonData}");
+                int intento = 0;
 
-                    // Obtener el código desde el propio objeto (no hace falta reparsear, pero lo dejo como lo tenés)
-                    JObject obj = JObject.Parse(jsonData);
-                    string? codigo = obj["producto"]?.ToString();
-
-                    if (string.IsNullOrEmpty(codigo))
-                    {
-                        Console.WriteLine("[SG1-POST] ERROR: No se pudo obtener el código del producto, se omite este envío.");
-                        continue;
-                    }
-
-                    Console.WriteLine($"[SG1-POST] Enviando POST para producto {codigo}...");
-                    Utilidades.EscribirEnLog($"[SG1-POST] Enviando POST para producto {codigo}...");
+                while (true)
+                {
+                    intento++;
 
                     int statusCode = 0;
                     string responseData = string.Empty;
 
                     try
                     {
-                        var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-                        HttpResponseMessage response = await client.PostAsync(url, content);
+                        await ProtheusHealth.WaitUntilActiveAsync("SG1-POST", RetryDelay);
+                        using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                        using HttpResponseMessage response = await _clientSG1.PostAsync(SG1_POST_URL, content);
 
                         statusCode = (int)response.StatusCode;
                         responseData = await response.Content.ReadAsStringAsync();
+                        LogErrorProtheusIfAny("SG1", "POST", codigo, responseData);
 
-                        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+                        // 409 => acumular para PUT (NO reintentar)
+                        if (response.StatusCode == HttpStatusCode.Conflict)
                         {
-                            Console.WriteLine($"[SG1-POST] POST devolvió 409 (Conflict) para {codigo}. Se acumula para PUT.");
-                            Utilidades.EscribirEnLog($"[SG1-POST] POST devolvió 409 (Conflict) para {codigo}. Se acumula para PUT.");
+                            Console.WriteLine($"[SG1-POST] 409 (Conflict) para {codigo}. Se acumula para PUT.");
+                            Utilidades.EscribirEnLog($"[SG1-POST] 409 (Conflict) para {codigo}. Se acumula para PUT.");
+
                             putFallBack[codigo] = parent.Value;
+
+                            // Registramos el resultado final para este producto
+                            ActualizarBase(statusCode, responseData, codigo);
+                            break;
                         }
-                        else if (response.IsSuccessStatusCode)
+
+                        // 5xx => reintento infinito
+                        if (IsRetryableStatus(response.StatusCode))
+                        {
+                            Console.WriteLine($"[SG1-POST] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}");
+                            Utilidades.EscribirEnLog($"[SG1-POST] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}. Resp: {responseData}");
+
+                            await Task.Delay(RetryDelay);
+                            continue;
+                        }
+
+                        // Éxito => OK
+                        if (response.IsSuccessStatusCode)
                         {
                             Console.WriteLine($"[SG1-POST] POST OK para {codigo}: {statusCode} - {responseData}");
                             Utilidades.EscribirEnLog($"[SG1-POST] POST OK para {codigo}: {statusCode} - {responseData}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[SG1-POST] POST ERROR para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
-                            Utilidades.EscribirEnLog($"[SG1-POST] POST ERROR para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+
+                            ActualizarBase(statusCode, responseData, codigo);
+                            break;
                         }
 
-                        Console.WriteLine($"[SG1-POST] Respuesta cruda para producto {codigo}: {responseData}, status {statusCode}");
-                        Utilidades.EscribirEnLog($"[SG1-POST] Respuesta cruda para producto {codigo}: {responseData}, status {statusCode}");
+                        // 4xx (distinto 409) => NO reintentar
+                        Console.WriteLine($"[SG1-POST] POST ERROR NO-RETRY para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+                        Utilidades.EscribirEnLog($"[SG1-POST] POST ERROR NO-RETRY para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+
+                        ActualizarBase(statusCode, responseData, codigo);
+                        break;
+                    }
+                    catch (Exception ex) when (IsRetryableException(ex))
+                    {
+                        Console.WriteLine($"[SG1-POST] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+                        Utilidades.EscribirEnLog($"[SG1-POST] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+
+                        await Task.Delay(RetryDelay);
+                        continue;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[SG1-POST] EXCEPCIÓN al enviar producto {producto}: {ex.Message}");
-                        Utilidades.EscribirEnLog($"[SG1-POST] EXCEPCIÓN al enviar producto {producto}: {ex.Message}");
-                    }
-                    finally
-                    {
-                        ActualizarBase(statusCode, responseData, codigo);
+                        // Error no transitorio: se registra y se corta (si querés también infinito acá, lo cambiamos)
+                        Console.WriteLine($"[SG1-POST] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+                        Utilidades.EscribirEnLog($"[SG1-POST] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+
+                        ActualizarBase(0, ex.ToString(), codigo);
+                        break;
                     }
                 }
             }
@@ -549,7 +589,7 @@ ORDER BY
             {
                 Console.WriteLine($"[SG1-POST] Finalizado POST. Hay {putFallBack.Count} productos con 409 → se dispara PUT masivo.");
                 Utilidades.EscribirEnLog($"[SG1-POST] Finalizado POST. Hay {putFallBack.Count} productos con 409 → se dispara PUT masivo.");
-                await putSG1(putFallBack);
+                await putSG1(putFallBack); // IMPORTANTE: putSG1 también debe tener retry infinito en 5xx
             }
             else
             {
@@ -560,12 +600,9 @@ ORDER BY
 
 
 
+
         public async Task postSG1(string jsonString, Dictionary<string, List<List<Dictionary<string, string>>>>? putAcumulador = null)
         {
-            string url = "http://119.8.73.193:8086/rest/TCEstructura/Incluir/";
-            string username = "USERREST";
-            string password = "restagr";
-
             bool esAcumuladorPropio = false;
             if (putAcumulador == null)
             {
@@ -575,91 +612,114 @@ ORDER BY
 
             Console.WriteLine("[SG1-POST-UNIT] Iniciando postSG1(string).");
 
-            using (HttpClient client = new HttpClient())
+            string? codigo = null;
+
+            try
             {
-                var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+                JObject obj = JObject.Parse(jsonString);
+                codigo = obj["producto"]?.ToString();
+
+                if (string.IsNullOrEmpty(codigo))
+                {
+                    Console.WriteLine("[SG1-POST-UNIT] ERROR: No se pudo obtener el código del producto del JSON.");
+                    Console.WriteLine($"[SG1-POST-UNIT] JSON recibido:\n{jsonString}");
+                    return;
+                }
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"[SG1-POST-UNIT] Error al parsear JSON: {ex.Message}");
+                Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Error al parsear JSON: {ex.Message}");
+                Console.WriteLine($"[SG1-POST-UNIT] JSON recibido:\n{jsonString}");
+                return;
+            }
+
+            Console.WriteLine($"[SG1-POST-UNIT] Código del producto: {codigo}");
+            Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Código del producto: {codigo}");
+            Utilidades.EscribirJSONEnLog($"[SG1-POST-UNIT] JSON COMPLETO:\n{jsonString}");
+
+            int intento = 0;
+
+            while (true)
+            {
+                intento++;
+
+                int statusCode = 0;
+                string responseData = string.Empty;
 
                 try
                 {
-                    JObject obj = JObject.Parse(jsonString);
-                    string? codigo = obj["producto"]?.ToString();
+                    await ProtheusHealth.WaitUntilActiveAsync("SG1-POST", RetryDelay);
+                    using var content = new StringContent(jsonString, Encoding.UTF8, "application/json");
+                    using HttpResponseMessage response = await _clientSG1.PostAsync(SG1_POST_URL, content);
 
-                    if (string.IsNullOrEmpty(codigo))
+                    statusCode = (int)response.StatusCode;
+                    responseData = await response.Content.ReadAsStringAsync();
+                    LogErrorProtheusIfAny("SG1", "POST", codigo, responseData);
+
+                    if (response.StatusCode == HttpStatusCode.Conflict)
                     {
-                        Console.WriteLine("[SG1-POST-UNIT] ERROR: No se pudo obtener el código del producto del JSON.");
-                        Console.WriteLine($"[SG1-POST-UNIT] JSON recibido:\n{jsonString}");
-                        return;
-                    }
+                        Console.WriteLine($"[SG1-POST-UNIT] 409 para {codigo}. Se acumula para PUT.");
+                        Utilidades.EscribirEnLog($"[SG1-POST-UNIT] 409 para {codigo}. Se acumula para PUT.");
 
-                    Console.WriteLine($"[SG1-POST-UNIT] Código del producto: {codigo}");
-                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Código del producto: {codigo}");
-                    //Console.WriteLine("[SG1-POST-UNIT] JSON a enviar (primeros 800 caracteres):");
-                    //Console.WriteLine(jsonString.Length > 800 ? jsonString.Substring(0, 800) + "..." : jsonString);
-                    Utilidades.EscribirEnLog(jsonString);
-                    int statusCode = 0;
-                    string responseData = string.Empty;
+                        var entrada = ConvertirJsonAEstructura(jsonString);
+                        putAcumulador[entrada.codigo] = entrada.estructura;
 
-                    try
-                    {
-                        var content = new StringContent(jsonString, Encoding.UTF8, "application/json");
-                        HttpResponseMessage response = await client.PostAsync(url, content);
-
-                        statusCode = (int)response.StatusCode;
-                        responseData = await response.Content.ReadAsStringAsync();
-
-                        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
-                        {
-                            Console.WriteLine($"[SG1-POST-UNIT] POST devolvió 409 para {codigo}. Se acumula para PUT.");
-                            Utilidades.EscribirEnLog($"[SG1-POST-UNIT] POST devolvió 409 para {codigo}. Se acumula para PUT.");
-                            var entrada = ConvertirJsonAEstructura(jsonString);
-                            putAcumulador[entrada.codigo] = entrada.estructura;
-                        }
-                        else if (response.IsSuccessStatusCode)
-                        {
-                            Console.WriteLine($"[SG1-POST-UNIT] POST OK para {codigo}: {statusCode} - {responseData}");
-                            Utilidades.EscribirEnLog($"[SG1-POST-UNIT] POST OK para {codigo}: {statusCode} - {responseData}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[SG1-POST-UNIT] POST ERROR para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
-                            Utilidades.EscribirEnLog($"[SG1-POST-UNIT] POST ERROR para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
-                        }
-
-                        Console.WriteLine($"[SG1-POST-UNIT] Respuesta para producto {codigo}: {responseData}, status {statusCode}");
-                        Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Respuesta para producto {codigo}: {responseData}, status {statusCode}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[SG1-POST-UNIT] EXCEPCIÓN al enviar producto {codigo}: {ex.Message}");
-                        Utilidades.EscribirEnLog($"[SG1-POST-UNIT] EXCEPCIÓN al enviar producto {codigo}: {ex.Message}");
-                    }
-                    finally
-                    {
                         ActualizarBase(statusCode, responseData, codigo);
+                        break;
                     }
+
+                    if (IsRetryableStatus(response.StatusCode))
+                    {
+                        Console.WriteLine($"[SG1-POST-UNIT] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}");
+                        Utilidades.EscribirEnLog($"[SG1-POST-UNIT] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}. Resp: {responseData}");
+
+                        await Task.Delay(RetryDelay);
+                        continue;
+                    }
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine($"[SG1-POST-UNIT] POST OK para {codigo}: {statusCode} - {responseData}");
+                        Utilidades.EscribirEnLog($"[SG1-POST-UNIT] POST OK para {codigo}: {statusCode} - {responseData}");
+
+                        ActualizarBase(statusCode, responseData, codigo);
+                        break;
+                    }
+
+                    Console.WriteLine($"[SG1-POST-UNIT] POST ERROR NO-RETRY para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] POST ERROR NO-RETRY para {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+
+                    ActualizarBase(statusCode, responseData, codigo);
+                    break;
                 }
-                catch (JsonException ex)
+                catch (Exception ex) when (IsRetryableException(ex))
                 {
-                    Console.WriteLine($"[SG1-POST-UNIT] Error al parsear JSON: {ex.Message}");
-                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Error al parsear JSON: {ex.Message}");
-                    Console.WriteLine($"[SG1-POST-UNIT] JSON recibido:\n{jsonString}");
+                    Console.WriteLine($"[SG1-POST-UNIT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+
+                    await Task.Delay(RetryDelay);
+                    continue;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SG1-POST-UNIT] Error general: {ex.Message}");
-                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Error general: {ex.Message}");
+                    Console.WriteLine($"[SG1-POST-UNIT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+                    Utilidades.EscribirEnLog($"[SG1-POST-UNIT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+
+                    ActualizarBase(0, ex.ToString(), codigo);
+                    break;
                 }
             }
 
             if (esAcumuladorPropio && putAcumulador.Count > 0)
             {
-                Console.WriteLine($"[SG1-POST-UNIT] Ejecutando PUT masivo (desde postSG1(string)) para {putAcumulador.Count} productos.");
-                Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Ejecutando PUT masivo (desde postSG1(string)) para {putAcumulador.Count} productos.");
-                await putSG1(putAcumulador);
+                Console.WriteLine($"[SG1-POST-UNIT] Ejecutando PUT masivo para {putAcumulador.Count} productos.");
+                Utilidades.EscribirEnLog($"[SG1-POST-UNIT] Ejecutando PUT masivo para {putAcumulador.Count} productos.");
+
+                await putSG1(putAcumulador); // IMPORTANTE: putSG1 también debe tener retry infinito en 5xx
             }
         }
+
 
         private static (string codigo, List<List<Dictionary<string, string>>> estructura)
         ConvertirJsonAEstructura(string jsonString)
@@ -681,15 +741,15 @@ ORDER BY
         }
         public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP()
         {
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             // ✅ Elegir query según compatibilidad del XML/BD
             string queryElegida;
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
                 queryElegida = ObtenerConsultaSG1_BOP(conn);
-                Utilidades.EscribirEnLog("SG1 -> Query elegida:\n" + queryElegida);
+                //Utilidades.EscribirEnLog("SG1 -> Query elegida:\n" + queryElegida);
             }
 
             var converter = new SqlToJsonConverter(connectionString);
@@ -740,85 +800,108 @@ ORDER BY
 
         public static async Task putSG1(Dictionary<string, List<List<Dictionary<string, string>>>> estructuras)
         {
-            string url = "http://119.8.73.193:8086/rest/TCEstructura/Modificar/";
-            string username = "USERREST";
-            string password = "restagr";
-
             Console.WriteLine($"[SG1-PUT] Iniciando PUT masivo. Cantidad de productos: {estructuras.Count}");
             Utilidades.EscribirEnLog($"[SG1-PUT] Iniciando PUT masivo. Cantidad de productos: {estructuras.Count}");
 
-            using (HttpClient client = new HttpClient())
+            foreach (var parent in estructuras)
             {
-                var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
+                string producto = parent.Key;
+                int cantItems = parent.Value?.Count ?? 0;
 
-                foreach (var parent in estructuras)
+                Console.WriteLine($"[SG1-PUT] Preparando PUT para producto {producto} con {cantItems} ítems de estructura...");
+
+                var jsonBody = new
                 {
-                    string producto = parent.Key;
-                    int cantItems = parent.Value?.Count ?? 0;
+                    producto = parent.Key,
+                    qtdBase = "1",
+                    estructura = parent.Value
+                };
 
-                    Console.WriteLine($"[SG1-PUT] Preparando PUT para producto {producto} con {cantItems} ítems de estructura...");
+                string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
 
-                    var jsonBody = new
-                    {
-                        producto = parent.Key,
-                        qtdBase = "1",
-                        estructura = parent.Value
-                    };
+                JObject obj = JObject.Parse(jsonData);
+                string? codigo = obj["producto"]?.ToString();
 
-                    string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
-                    JObject obj = JObject.Parse(jsonData);
-                    string? codigo = obj["producto"]?.ToString();
+                if (string.IsNullOrEmpty(codigo))
+                {
+                    Console.WriteLine("[SG1-PUT] ERROR: No se pudo obtener el código del producto, se omite este envío.");
+                    continue;
+                }
 
-                    if (string.IsNullOrEmpty(codigo))
-                    {
-                        Console.WriteLine("[SG1-PUT] ERROR: No se pudo obtener el código del producto, se omite este envío.");
-                        continue;
-                    }
+                // Ojo: imprimir JSON completo en consola puede ser enorme. Lo dejo como lo tenés.
+                Console.WriteLine($"[SG1-PUT] JSON generado para producto {codigo}:");
+                Console.WriteLine(jsonData);
 
-                    Console.WriteLine($"[SG1-PUT] JSON generado para producto {codigo} (primeros 800 caracteres):");
-                    Console.WriteLine(jsonData);
+                int intento = 0;
+
+                while (true)
+                {
+                    intento++;
 
                     int statusCode = 0;
                     string responseData = string.Empty;
 
                     try
                     {
-                        var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-                        HttpResponseMessage response = await client.PutAsync(url, content);
+                        await ProtheusHealth.WaitUntilActiveAsync("SG1-PUT", RetryDelay);
+                        using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                        using HttpResponseMessage response = await _clientSG1.PutAsync(SG1_PUT_URL, content);
 
                         statusCode = (int)response.StatusCode;
                         responseData = await response.Content.ReadAsStringAsync();
+                        LogErrorProtheusIfAny("SG1", "PUT", codigo, responseData);
 
+                        // 5xx => reintento infinito
+                        if (IsRetryableStatus(response.StatusCode))
+                        {
+                            Console.WriteLine($"[SG1-PUT] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}");
+                            Utilidades.EscribirEnLog($"[SG1-PUT] {statusCode} para {codigo}. Reintento infinito en 5 minutos. Intento #{intento}. Resp: {responseData}");
+
+                            await Task.Delay(RetryDelay);
+                            continue;
+                        }
+
+                        // Éxito => OK
                         if (response.IsSuccessStatusCode)
                         {
                             Console.WriteLine($"[SG1-PUT] PUT OK para producto {codigo}: {statusCode} - {responseData}");
                             Utilidades.EscribirEnLog($"[SG1-PUT] PUT OK para producto {codigo}: {statusCode} - {responseData}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[SG1-PUT] PUT ERROR para producto {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
-                            Utilidades.EscribirEnLog($"[SG1-PUT] PUT ERROR para producto {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+
+                            ActualizarBase(statusCode, responseData, codigo);
+                            break;
                         }
 
-                        Console.WriteLine($"[SG1-PUT] Respuesta cruda para producto {codigo}: {responseData}, status {statusCode}");
-                        Utilidades.EscribirEnLog($"[SG1-PUT] Respuesta cruda para producto {codigo}: {responseData}, status {statusCode}");
+                        // 4xx => NO reintentar
+                        Console.WriteLine($"[SG1-PUT] PUT ERROR NO-RETRY para producto {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+                        Utilidades.EscribirEnLog($"[SG1-PUT] PUT ERROR NO-RETRY para producto {codigo}: {statusCode} {response.ReasonPhrase}. Contenido: {responseData}");
+
+                        ActualizarBase(statusCode, responseData, codigo);
+                        break;
+                    }
+                    catch (Exception ex) when (IsRetryableException(ex))
+                    {
+                        Console.WriteLine($"[SG1-PUT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+                        Utilidades.EscribirEnLog($"[SG1-PUT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento infinito en 5 minutos. Intento #{intento}");
+
+                        await Task.Delay(RetryDelay);
+                        continue;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[SG1-PUT] EXCEPCIÓN al enviar producto {producto}: {ex.Message}");
-                        Utilidades.EscribirEnLog($"[SG1-PUT] EXCEPCIÓN al enviar producto {producto}: {ex.Message}");
-                    }
-                    finally
-                    {
-                        ActualizarBase(statusCode, responseData, codigo);
+                        // No transitorio: se registra y se corta este producto
+                        Console.WriteLine($"[SG1-PUT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+                        Utilidades.EscribirEnLog($"[SG1-PUT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+
+                        ActualizarBase(0, ex.ToString(), codigo);
+                        break;
                     }
                 }
             }
 
             Console.WriteLine("[SG1-PUT] PUT masivo finalizado.");
+            Utilidades.EscribirEnLog("[SG1-PUT] PUT masivo finalizado.");
         }
+
 
         static void AgregarFechaAServiciosTerceros(
     Dictionary<string, List<List<Dictionary<string, string>>>> estructuras,
@@ -886,8 +969,8 @@ ORDER BY
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                Integrated Security=True;TrustServerCertificate=True";
 
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             Console.WriteLine("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
             Utilidades.EscribirEnLog("[SG1-JSON] Iniciando generación de estructuras SG1 desde SQL...");
 
@@ -1182,8 +1265,8 @@ ORDER BY b.Process_codigo;
 
                                 //Console.WriteLine("[JSON MBOM]");
                                 //Console.WriteLine(json);
-                                Utilidades.EscribirEnLog("[JSON MBOM]");
-                                Utilidades.EscribirEnLog(json);
+                                Utilidades.EscribirJSONEnLog("[SG1 - JSON MBOM]");
+                                Utilidades.EscribirJSONEnLog(json);
                                 // (opcional) a archivo para no saturar consola
                                 //File.WriteAllText("mbom_debug.json", json);
                                 //Console.WriteLine("[MBOM] Dump a mbom_debug.json");
@@ -1354,8 +1437,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                    Integrated Security=True;TrustServerCertificate=True";
 
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = "INSERT INTO SG1 VALUES (@Nombre_Padre, @Codigo_Padre, @Nombre_Hijo, @Codigo_Hijo, @CantidadHijo, NULL, NULL)";
             try
             {
@@ -1385,8 +1468,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                    Integrated Security=True;TrustServerCertificate=True";
 
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"UPDATE SG1
                      SET estado = @estado, mensaje = @mensaje
                      WHERE Codigo_Padre = @codigo";

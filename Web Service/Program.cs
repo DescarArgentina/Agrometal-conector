@@ -12,69 +12,152 @@ using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
 using static Web_Service.SqlToJsonConverter;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
+
+
+
 
 namespace Web_Service // Note: actual namespace depends on the project name.
 {
     internal class Program
     {
+        // MUTEX GLOBAL (single instance)
+        private const string GlobalMutexName = @"Global\DescarConector_WebService_SingleInstance";
+        private static Mutex? _singleInstanceMutex;
+        private static bool _mutexHeld;
+
+
         // Modelos para mapear los datos de SQL
 
         static async Task Main(string[] args)
         {
-            // 1) Validación de parámetros
-            if (args == null || args.Length < 4)
+            Mutex? singleInstanceMutex = null;
+            bool ownsMutex = false;
+
+            try
             {
-                Console.WriteLine("Uso:");
-                Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
-                Console.WriteLine("Ejemplo:");
-                Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
-                Environment.ExitCode = 1;
-                return;
+                // 0) MUTEX GLOBAL (una sola instancia en todo el SO)
+                // Nota: "Global\" puede requerir privilegios para crearse si lo corrés manual como usuario no-admin.
+                // En servicio (LocalSystem) normalmente no hay problema.
+                try
+                {
+                    // Crea o abre el mutex (si ya existe, createdNew=false, pero igual tenemos el handle)
+                    singleInstanceMutex = new Mutex(false, GlobalMutexName, out _);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // No pude crearlo (típico si existe con ACL restrictiva o falta privilegio).
+                    // Intento abrir el mutex existente:
+                    try
+                    {
+                        singleInstanceMutex = Mutex.OpenExisting(GlobalMutexName);
+                    }
+                    catch (Exception openEx)
+                    {
+                        Console.WriteLine($"No se pudo crear/abrir el mutex global '{GlobalMutexName}'. " +
+                                          $"Ejecutá como Administrador o corré solo vía servicio. Detalle: {openEx.Message}");
+                        Environment.ExitCode = 11;
+                        return;
+                    }
+                }
+
+                // Intento adquirirlo al instante (0 ms). Si no lo puedo adquirir, hay otra instancia corriendo.
+                try
+                {
+                    ownsMutex = singleInstanceMutex.WaitOne(0, false);
+                }
+                catch (AbandonedMutexException)
+                {
+                    // La instancia anterior murió sin liberar: se considera adquirido.
+                    ownsMutex = true;
+                }
+
+                if (!ownsMutex)
+                {
+                    Console.WriteLine("Ya existe otra instancia de Web_Service.exe ejecutándose. Esta instancia finalizará.");
+                    Environment.ExitCode = 10;
+                    return;
+                }
+
+                // 1) Validación de parámetros
+                if (args == null || args.Length < 4)
+                {
+                    Console.WriteLine("Uso:");
+                    Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
+                    Console.WriteLine("Ejemplo:");
+                    Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                string mbomInput = Path.GetFullPath(args[0]);
+                string mbomProcesada = Path.GetFullPath(args[1]);
+                string bopInput = Path.GetFullPath(args[2]);
+                string bopProcesada = Path.GetFullPath(args[3]);
+
+                Utilidades.InicializarLogPorMbom(mbomInput);
+                Utilidades.EscribirEnLog($"Inicio ScriptPrincipal (Mutex OK). MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
+
+                // 2) Validación/creación de carpetas (mínimo)
+                if (!Directory.Exists(mbomInput))
+                {
+                    Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
+                    Environment.ExitCode = 2;
+                    return;
+                }
+                if (!Directory.Exists(bopInput))
+                {
+                    Console.WriteLine($"No existe BOP_Input: {bopInput}");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+
+                Directory.CreateDirectory(mbomProcesada);
+                Directory.CreateDirectory(bopProcesada);
+
+                // 3) ConnectionString
+                string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+                //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+
+                // 4) Procesar MBOM
+                await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
+
+                // 5) Limpiar BD ANTES de BOP
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    BorrarTabla(conn, new Dictionary<string, TableBucket>());
+                }
+
+                // 6) Procesar BOP
+                await ProcesarBOP(connectionString, bopInput, bopProcesada);
+
+                Environment.ExitCode = 0;
             }
-
-            string mbomInput = Path.GetFullPath(args[0]);
-            string mbomProcesada = Path.GetFullPath(args[1]);
-            string bopInput = Path.GetFullPath(args[2]);
-            string bopProcesada = Path.GetFullPath(args[3]);
-
-            Utilidades.InicializarLogPorMbom(mbomInput);
-            Utilidades.EscribirEnLog($"Inicio ScriptPrincipal. MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
-
-
-            // 2) Validación/creación de carpetas (mínimo)
-            if (!Directory.Exists(mbomInput))
+            catch (Exception ex)
             {
-                Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
-                Environment.ExitCode = 2;
-                return;
+                // Si ya inicializaste log por MBOM, esto quedará registrado
+                try { Utilidades.EscribirEnLog($"[FATAL] Excepción no controlada en Main: {ex}"); } catch { }
+                Console.WriteLine(ex.ToString());
+                Environment.ExitCode = 99;
             }
-            if (!Directory.Exists(bopInput))
+            finally
             {
-                Console.WriteLine($"No existe BOP_Input: {bopInput}");
-                Environment.ExitCode = 3;
-                return;
+                // Liberar mutex SOLO si lo adquirimos
+                if (singleInstanceMutex != null)
+                {
+                    if (ownsMutex)
+                    {
+                        try { singleInstanceMutex.ReleaseMutex(); } catch { /* noop */ }
+                    }
+                    singleInstanceMutex.Dispose();
+                }
             }
-
-            // Estas dos normalmente las crea el monitor, pero las garantizamos igual:
-            Directory.CreateDirectory(mbomProcesada);
-            Directory.CreateDirectory(bopProcesada);
-
-            // 3) ConnectionString (igual que hoy)
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            // 4) Procesar MBOM con rutas dinámicas
-            await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
-
-            // 5) Limpiar BD ANTES de BOP (igual que hoy)
-            using (SqlConnection conn = new SqlConnection(connectionString))
-            {
-                conn.Open();
-                BorrarTabla(conn, new Dictionary<string, TableBucket>());
-            }
-
-            // 6) Procesar BOP con rutas dinámicas
-            await ProcesarBOP(connectionString, bopInput, bopProcesada);
         }
+
+
 
 
         public class TableBucket
@@ -251,6 +334,10 @@ ORDER BY
 
             foreach (string archivo in archivos)
             {
+                // PAUSA (para que no borre la base por si hay que testear consultas)
+                //Console.ReadLine();
+                // LIMPIAR EXCLUSIONES POR XML
+                Sg1Exclusions.Clear();
                 bool borrarTablas = true;
                 try
                 {
@@ -317,7 +404,7 @@ ORDER BY
                                 await Tablas_SG2_SH3.EnviarSG2_SH3(s);
 
                                 //Console.WriteLine(s);
-                                Utilidades.EscribirEnLog(s);
+                                Utilidades.EscribirJSONEnLog(s);
                             }
 
 
@@ -329,14 +416,23 @@ ORDER BY
                             Console.WriteLine("\n============================");
                             //converter.ProcessHierarchicalJsons(sqlQuery);
 
-                            var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                            try
+                            {
+                                var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                            }
+                            catch (Exception exConv)
+                            {
+                                Utilidades.EscribirEnLog($"[BOP][WARN] Falló ConvertToHierarchicalJsonStrings: {exConv.Message}\n{exConv}");
+                                // seguir igual, no marcar Error BOP por esto
+                            }
+
                             //Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
 
-                            for (int i = 0; i < jsonStrings.Count; i++)
-                            {
-                                //Console.WriteLine($"\nJSON #{i + 1}:");
-                                //Console.WriteLine(jsonStrings[i]);
-                            }
+                            //for (int i = 0; i < jsonStrings.Count; i++)
+                            //{
+                            //    //Console.WriteLine($"\nJSON #{i + 1}:");
+                            //    //Console.WriteLine(jsonStrings[i]);
+                            //}
 
 
                         }
@@ -346,7 +442,7 @@ ORDER BY
                 }
                 catch (Exception ea)
                 {
-                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\nError: {ea.Message}");
+                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\n{ea}");
                 }
             }
         }
