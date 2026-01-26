@@ -6,6 +6,8 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.ConstrainedExecution;
@@ -21,71 +23,569 @@ namespace Web_Service
 {
     public class Tablas_SG2_SH3
     {
-
         public sealed class WsError
         {
             public int? errorCode { get; set; }
             public string errorMessage { get; set; }
         }
 
-        public static async Task EnviarSG2_SH3(string jsonData)
+        // =========================
+        // CONFIG PROTHEUS
+        // =========================
+        private const string UrlPost = "http://119.8.73.193:8096/rest/TCProceso/Incluir/";
+        private const string UrlPut = "http://119.8.73.193:8096/rest/TCProceso/Modificar/";
+
+        private const string Username = "USERREST";
+        private const string Password = "restagr";
+        // Protheus MV_TPHR = N (HH.MM) y restricción 99.59
+        private const int MAX_MINUTES_TOTAL = 99 * 60 + 59;          // 5999
+        private const int MAX_SECONDS_TOTAL = MAX_MINUTES_TOTAL * 60; // 359940
+        private static double ParseDoubleInvariant(string raw)
         {
-            string urlPost = "http://119.8.73.193:8086/rest/TCProceso/Incluir/";
-            string urlPut = "http://119.8.73.193:8086/rest/TCProceso/Modificar/";
-            string username = "USERREST";
-            string password = "restagr";
+            if (string.IsNullOrWhiteSpace(raw)) return 0.0;
+            raw = raw.Trim().Replace(',', '.');
+            return double.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0.0;
+        }
 
-            using var client = new HttpClient();
-            var credentials = Encoding.ASCII.GetBytes($"{username}:{password}");
-            client.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(credentials));
-
-            // 1) Intento POST
-            var contentPost = new StringContent(jsonData, Encoding.UTF8, "application/json");
-            var responsePost = await client.PostAsync(urlPost, contentPost);
-            var bodyPost = await responsePost.Content.ReadAsStringAsync();
-
-            Console.WriteLine($"POST TCProceso -> {(int)responsePost.StatusCode} {responsePost.ReasonPhrase}");
-            Console.WriteLine(bodyPost);
-            Utilidades.EscribirEnLog($"POST TCProceso -> {(int)responsePost.StatusCode} {responsePost.ReasonPhrase}");
-            Utilidades.EscribirEnLog(bodyPost);
-
-            if (responsePost.IsSuccessStatusCode)
+        private static int Gcd(int a, int b)
+        {
+            a = Math.Abs(a);
+            b = Math.Abs(b);
+            while (b != 0)
             {
-                Console.WriteLine("POST OK, no hace falta PUT.");
-                Utilidades.EscribirEnLog("POST OK, no hace falta PUT.");
-                return;
+                int t = a % b;
+                a = b;
+                b = t;
+            }
+            return a == 0 ? 1 : a;
+        }
+
+        private sealed class TiempoLoteCalc
+        {
+            public string TiempoHHMM { get; init; }   // "HH.MM"
+            public int LoteStd { get; init; }
+            public bool EsAprox { get; init; }
+            public double ErrorPct { get; init; }     // % error por pieza
+            public int SegundosPorPieza { get; init; }
+            public double MinutosDecimalesOriginal { get; init; }
+        }
+
+        private static string MinutesToHHMM(int totalMinutes)
+        {
+            int hh = totalMinutes / 60;
+            int mm = totalMinutes % 60;
+
+            if (totalMinutes <= 0) return "00.01";  // mínimo 1 minuto
+
+            if (hh < 0) hh = 0;
+            if (hh > 99) { hh = 99; mm = 59; }
+            if (mm < 0) mm = 0;
+            if (mm > 59) mm = 59;
+
+            return $"{hh:D2}.{mm:D2}";
+        }
+
+        /// <summary>
+        /// allocated_time_centesimal: OJO en este proyecto viene en MINUTOS decimales (aunque el alias diga "centesimal").
+        /// Devuelve tiempo (HH.MM) y loteStd aplicando:
+        /// - exactitud por MCD con 60 segundos
+        /// - si excede 99.59, usa Lmax + redondeo al minuto más cercano
+        /// </summary>
+        /// <summary>
+        /// allocated_time_centesimal_raw: OJO: en este proyecto viene en SEGUNDOS por pieza (aunque el alias diga "centesimal").
+        /// Devuelve tiempo (HH.MM) y loteStd aplicando:
+        /// - exactitud por MCD con 60 segundos
+        /// - si excede 99.59, usa Lmax + redondeo al minuto más cercano
+        /// </summary>
+        private static TiempoLoteCalc CalcularTiempoYLoteDesdeSegundos(string allocated_time_centesimal_raw, string producto, string operacion)
+        {
+            // 1) Parse segundos por pieza (puede venir con decimales)
+            double segOriginal = ParseDoubleInvariant(allocated_time_centesimal_raw);
+
+            // Política mínima: si viene 0 o inválido -> 1 minuto por pieza
+            if (segOriginal <= 0.0) segOriginal = 60.0;
+
+            // 2) Para MCD necesitamos entero: redondeo al segundo
+            int tSeconds = (int)Math.Round(segOriginal, MidpointRounding.AwayFromZero);
+            if (tSeconds <= 0) tSeconds = 60;
+
+            // 3) Intento exacto (forzar minutos enteros por lote)
+            int g = Gcd(tSeconds, 60);
+            int L0 = 60 / g;        // lote exacto mínimo
+            int M0 = tSeconds / g;  // minutos exactos del lote
+
+            if (M0 <= MAX_MINUTES_TOTAL)
+            {
+                return new TiempoLoteCalc
+                {
+                    SegundosPorPieza = tSeconds,
+                    LoteStd = L0,
+                    TiempoHHMM = MinutesToHHMM(M0),
+                    EsAprox = false,
+                    ErrorPct = 0.0,
+                    MinutosDecimalesOriginal = segOriginal / 60.0 // opcional: para log/diagnóstico
+                };
             }
 
-            // 2) Solo si es un caso de "ya existe", hago UN SOLO PUT
-            bool esRegistroExistente =
-                responsePost.StatusCode == System.Net.HttpStatusCode.Conflict ||
-                bodyPost.Contains("ya existe", StringComparison.OrdinalIgnoreCase) ||
-                bodyPost.Contains("Registro duplicado", StringComparison.OrdinalIgnoreCase);
+            // 4) No entra en 99.59 -> modo restringido (aprox)
+            int Lmax = MAX_SECONDS_TOTAL / tSeconds; // floor(359940 / tSeconds)
 
-            if (!esRegistroExistente)
+            if (Lmax < 1)
             {
-                Console.WriteLine("POST falló por otra causa, NO se intenta PUT.");
-                Utilidades.EscribirEnLog("POST falló por otra causa, NO se intenta PUT.");
-                return;
+                Utilidades.EscribirEnLog(
+                    $"[SG2SH3][TIEMPO] WARNING: tiempo por pieza excede 99.59 con lote=1 | prod={producto} op={operacion} raw={allocated_time_centesimal_raw} seg={segOriginal}. Se capea a 99.59.");
+
+                return new TiempoLoteCalc
+                {
+                    SegundosPorPieza = tSeconds,
+                    LoteStd = 1,
+                    TiempoHHMM = "99.59",
+                    EsAprox = true,
+                    ErrorPct = 0.0,
+                    MinutosDecimalesOriginal = segOriginal / 60.0
+                };
             }
 
-            Console.WriteLine("Intentando PUT /Modificar por registro existente...");
-            Utilidades.EscribirEnLog("Intentando PUT /Modificar por registro existente...");
-            var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
-            var responsePut = await client.PutAsync(urlPut, contentPut);
-            var bodyPut = await responsePut.Content.ReadAsStringAsync();
+            double minutosReal = (tSeconds * (double)Lmax) / 60.0;
+            int minutosRedondeados = (int)Math.Round(minutosReal, MidpointRounding.AwayFromZero);
 
-            Console.WriteLine($"PUT TCProceso -> {(int)responsePut.StatusCode} {responsePut.ReasonPhrase}");
-            Console.WriteLine(bodyPut);
-            Utilidades.EscribirEnLog($"PUT TCProceso -> {(int)responsePut.StatusCode} {responsePut.ReasonPhrase}");
-            Utilidades.EscribirEnLog(bodyPut);
-            if (!responsePut.IsSuccessStatusCode)
+            if (minutosRedondeados < 1) minutosRedondeados = 1;
+            if (minutosRedondeados > MAX_MINUTES_TOTAL) minutosRedondeados = MAX_MINUTES_TOTAL;
+
+            // Error por pieza (compará contra segOriginal, no solo tSeconds)
+            double segPorPiezaRepresentado = (minutosRedondeados * 60.0) / Lmax;
+            double errorPct = (Math.Abs(segPorPiezaRepresentado - segOriginal) / segOriginal) * 100.0;
+
+            return new TiempoLoteCalc
             {
-                Console.WriteLine("PUT falló, no se reintenta para evitar bucles.");
-                Utilidades.EscribirEnLog("PUT falló, no se reintenta para evitar bucles.");
+                SegundosPorPieza = tSeconds,
+                LoteStd = Lmax,
+                TiempoHHMM = MinutesToHHMM(minutosRedondeados),
+                EsAprox = true,
+                ErrorPct = errorPct,
+                MinutosDecimalesOriginal = segOriginal / 60.0
+            };
+        }
+
+
+        // Healthcheck dedicado (nuevo)
+        private const string UrlHealth = "http://119.8.73.193:8096/rest/TCEstado/Consultar/";
+        private const string HealthBodyJson = "{\"consulta\":\"TeamCenter\"}";
+
+        private const string TablaLogErroresProtheus = "SG2SH3";
+
+        // Misma política que tus otras tablas
+        private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
+
+        // Timeout “negocio” para POST/PUT
+        private static readonly TimeSpan BusinessTimeout = TimeSpan.FromSeconds(100);
+
+        // Cache para no sobrecargar el healthcheck
+        private static DateTime _lastHealthOkUtc = DateTime.MinValue;
+        private static readonly object _healthLock = new();
+
+        // =========================
+        // HTTP CLIENTS (estáticos)
+        // =========================
+        private static readonly HttpClient _clientSG2SH3 = CrearClienteBusiness();
+        private static readonly HttpClient _clientHealth = CrearClienteHealth();
+
+        private static HttpClient CrearClienteBusiness()
+        {
+            var client = new HttpClient
+            {
+                Timeout = BusinessTimeout
+            };
+
+            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Username}:{Password}"));
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+
+            return client;
+        }
+
+        private static HttpClient CrearClienteHealth()
+        {
+            var client = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(5) // health corto
+            };
+
+            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Username}:{Password}"));
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+
+            return client;
+        }
+
+        // =========================
+        // LOGGING (ErroresProtheus.log)
+        // =========================
+        private static WsError TryParseWsError(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            try
+            {
+                return JsonConvert.DeserializeObject<WsError>(body);
+            }
+            catch
+            {
+                return null;
             }
         }
+
+        private static string Truncar(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return s ?? "";
+            if (s.Length <= max) return s;
+            return s.Substring(0, max) + "...";
+        }
+
+        private static void LogErrorProtheus(string metodo, string producto, HttpStatusCode status, string body)
+        {
+            var err = TryParseWsError(body);
+            int? errorCode = err?.errorCode;
+
+            // ✅ Purga: POST + errorCode=3 (registro existente) NO se registra (ruido)
+            if (string.Equals(metodo, "POST", StringComparison.OrdinalIgnoreCase) && errorCode == 3)
+                return;
+
+            string msgBase = !string.IsNullOrWhiteSpace(err?.errorMessage)
+                ? err.errorMessage
+                : Truncar(body ?? "", 600);
+
+            string msg = $"HTTP {(int)status} {status} | {msgBase}";
+
+            // ✅ Evitar "LEGACY": si es OP asociada (7/10), lo dejamos explícito dentro del mismo log normal
+            if (errorCode == 7 || errorCode == 10)
+                msg = $"Orden de producción asociada | {msg}";
+
+            Utilidades.EscribirErrorProtheus(
+                tabla: TablaLogErroresProtheus,
+                metodo: metodo,
+                producto: producto ?? "",
+                errorCode: errorCode,
+                errorMessage: msg
+            );
+        }
+
+        private static void LogExcepcionProtheus(string metodo, string producto, Exception ex)
+        {
+            Utilidades.EscribirErrorProtheus(
+                tabla: TablaLogErroresProtheus,
+                metodo: metodo,
+                producto: producto ?? "",
+                errorCode: null,
+                errorMessage: $"EXCEPTION | {ex.GetType().Name}: {ex.Message}"
+            );
+        }
+
+        // =========================
+        // ENVÍO SG2/SH3 (alineado a SB1/SG1)
+        // =========================
+        public static async Task EnviarSG2_SH3(string jsonData)
+        {
+            // Intentamos tomar algún identificador del JSON (si existe)
+            string codigo = TryGetProducto(jsonData);
+
+            Console.WriteLine($"[SG2SH3][POST] Enviando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+            Utilidades.EscribirEnLog($"[SG2SH3][POST] Enviando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+
+            int intento = 0;
+
+            while (true)
+            {
+                intento++;
+
+                try
+                {
+                    // 1) Healthcheck PRE: si da timeout => reintento infinito
+                    await WaitUntilProtheusActiveAsync($"SG2SH3-POST {codigo ?? ""}");
+
+                    using var contentPost = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                    using HttpResponseMessage responsePost = await _clientSG2SH3.PostAsync(UrlPost, contentPost);
+                    string bodyPost = await responsePost.Content.ReadAsStringAsync();
+
+                    int statusCode = (int)responsePost.StatusCode;
+
+                    Console.WriteLine($"[SG2SH3][POST] -> {statusCode} {responsePost.ReasonPhrase} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][POST] -> {statusCode} {responsePost.ReasonPhrase} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][POST] Body: {bodyPost}");
+
+                    // OK
+                    if (responsePost.IsSuccessStatusCode)
+                    {
+                        // 2) Healthcheck POST: best-effort (no bloquea)
+                        _ = PostCheckBestEffortAsync($"SG2SH3-POSTCHECK {codigo ?? ""}");
+                        return;
+                    }
+
+                    // Registro existente => PUT con retry infinito
+                    if (EsRegistroExistente(responsePost.StatusCode, bodyPost))
+                    {
+                        // ✅ No registrar acá como “error”, porque se resuelve con PUT.
+                        // (y si viniera errorCode=3, LogErrorProtheus ya lo filtraría)
+
+                        Console.WriteLine($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
+                        Utilidades.EscribirEnLog($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
+
+                        await PutSG2_SH3(jsonData, codigo);
+                        _ = PostCheckBestEffortAsync($"SG2SH3-PUTCHECK {codigo ?? ""}");
+                        return;
+                    }
+
+                    // 5xx => retry infinito (NO ensuciar ErroresProtheus en cada reintento)
+                    if (IsRetryableStatus(responsePost.StatusCode))
+                    {
+                        Console.WriteLine($"[SG2SH3][POST] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                        Utilidades.EscribirEnLog($"[SG2SH3][POST] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                        await Task.Delay(RetryDelay);
+                        continue;
+                    }
+
+                    // 4xx (distinto a registro existente) => NO retry + ✅ log ErroresProtheus
+                    LogErrorProtheus("POST", codigo, responsePost.StatusCode, bodyPost);
+
+                    Console.WriteLine($"[SG2SH3][POST] ERROR NO-RETRY {statusCode}. Abortando envío. producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][POST] ERROR NO-RETRY {statusCode}. Abortando envío. producto={codigo}");
+                    return;
+                }
+                catch (Exception ex) when (IsRetryableException(ex))
+                {
+                    Console.WriteLine($"[SG2SH3][POST] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][POST] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                    await Task.Delay(RetryDelay);
+                }
+                catch (Exception ex)
+                {
+                    // ✅ log ErroresProtheus (una vez) y cortar
+                    LogExcepcionProtheus("POST", codigo, ex);
+
+                    Console.WriteLine($"[SG2SH3][POST] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][POST] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+                    return;
+                }
+            }
+        }
+
+        private static async Task PutSG2_SH3(string jsonData, string codigo)
+        {
+            Console.WriteLine($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+            Utilidades.EscribirEnLog($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+
+            int intento = 0;
+
+            while (true)
+            {
+                intento++;
+
+                try
+                {
+                    // Healthcheck PRE
+                    await WaitUntilProtheusActiveAsync($"SG2SH3-PUT {codigo ?? ""}");
+
+                    using var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                    using HttpResponseMessage responsePut = await _clientSG2SH3.PutAsync(UrlPut, contentPut);
+                    string bodyPut = await responsePut.Content.ReadAsStringAsync();
+
+                    int statusCode = (int)responsePut.StatusCode;
+
+                    Console.WriteLine($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Body: {bodyPut}");
+
+                    // 5xx => retry infinito (NO ensuciar ErroresProtheus en cada reintento)
+                    if (IsRetryableStatus(responsePut.StatusCode))
+                    {
+                        Console.WriteLine($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                        Utilidades.EscribirEnLog($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                        await Task.Delay(RetryDelay);
+                        continue;
+                    }
+
+                    // ✅ 4xx (o cualquier NO OK no-retry) => registrar en ErroresProtheus
+                    if (!responsePut.IsSuccessStatusCode)
+                    {
+                        LogErrorProtheus("PUT", codigo, responsePut.StatusCode, bodyPut);
+
+                        Console.WriteLine($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
+                        Utilidades.EscribirEnLog($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
+                    }
+
+                    return; // éxito o error no-retry
+                }
+                catch (Exception ex) when (IsRetryableException(ex))
+                {
+                    Console.WriteLine($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+                    await Task.Delay(RetryDelay);
+                }
+                catch (Exception ex)
+                {
+                    // ✅ log ErroresProtheus (una vez) y cortar
+                    LogExcepcionProtheus("PUT", codigo, ex);
+
+                    Console.WriteLine($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+                    return;
+                }
+            }
+        }
+
+        // =========================
+        // HEALTHCHECK (timeout => retry infinito)
+        // =========================
+        private static async Task WaitUntilProtheusActiveAsync(string tag)
+        {
+            // cache 15s para no sobrecargar
+            if ((DateTime.UtcNow - _lastHealthOkUtc) < TimeSpan.FromSeconds(15))
+                return;
+
+            int intento = 0;
+
+            while (true)
+            {
+                intento++;
+
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Get, UrlHealth)
+                    {
+                        Content = new StringContent(HealthBodyJson, Encoding.UTF8, "application/json")
+                    };
+
+                    using HttpResponseMessage resp = await _clientHealth.SendAsync(req);
+                    string body = await resp.Content.ReadAsStringAsync();
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine($"[{tag}][HEALTH] HTTP {(int)resp.StatusCode}. Reintentando en 5 minutos. Intento #{intento}. Body: {body}");
+                        Utilidades.EscribirEnLog($"[{tag}][HEALTH] HTTP {(int)resp.StatusCode}. Reintentando en 5 minutos. Intento #{intento}. Body: {body}");
+                        await Task.Delay(RetryDelay);
+                        continue;
+                    }
+
+                    string estado = null;
+                    try
+                    {
+                        var j = JObject.Parse(body);
+                        estado = j["estado"]?.ToString();
+                    }
+                    catch
+                    {
+                        estado = null;
+                    }
+
+                    if (!string.Equals(estado, "activo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine($"[{tag}][HEALTH] Estado='{estado ?? "null"}'. Reintentando en 5 minutos. Intento #{intento}. Body: {body}");
+                        Utilidades.EscribirEnLog($"[{tag}][HEALTH] Estado='{estado ?? "null"}'. Reintentando en 5 minutos. Intento #{intento}. Body: {body}");
+                        await Task.Delay(RetryDelay);
+                        continue;
+                    }
+
+                    lock (_healthLock)
+                        _lastHealthOkUtc = DateTime.UtcNow;
+
+                    return; // OK
+                }
+                catch (TaskCanceledException ex)
+                {
+                    // TIMEOUT del health (caso crítico)
+                    Console.WriteLine($"[{tag}][HEALTH] TIMEOUT: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    Utilidades.EscribirEnLog($"[{tag}][HEALTH] TIMEOUT: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    await Task.Delay(RetryDelay);
+                }
+                catch (HttpRequestException ex)
+                {
+                    Console.WriteLine($"[{tag}][HEALTH] ERROR HTTP/red: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    Utilidades.EscribirEnLog($"[{tag}][HEALTH] ERROR HTTP/red: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    await Task.Delay(RetryDelay);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{tag}][HEALTH] ERROR inesperado: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    Utilidades.EscribirEnLog($"[{tag}][HEALTH] ERROR inesperado: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    await Task.Delay(RetryDelay);
+                }
+            }
+        }
+
+        // Best-effort: no bloquea el pipeline
+        private static async Task PostCheckBestEffortAsync(string tag)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, UrlHealth)
+                {
+                    Content = new StringContent(HealthBodyJson, Encoding.UTF8, "application/json")
+                };
+
+                using HttpResponseMessage resp = await _clientHealth.SendAsync(req);
+                _ = await resp.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{tag}][HEALTH-POSTCHECK] WARN: {ex.Message}");
+                Utilidades.EscribirEnLog($"[{tag}][HEALTH-POSTCHECK] WARN: {ex.Message}");
+            }
+        }
+
+        // =========================
+        // HELPERS envío
+        // =========================
+
+        private static bool EsErrorOrdenesProduccion(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return false;
+
+            try
+            {
+                var err = JsonConvert.DeserializeObject<WsError>(body);
+                return err?.errorCode == 7 || err?.errorCode == 10;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsRetryableStatus(HttpStatusCode status)
+        {
+            int code = (int)status;
+            return code >= 500 && code <= 599;
+        }
+
+        private static bool IsRetryableException(Exception ex)
+        {
+            return ex is TaskCanceledException || ex is HttpRequestException;
+        }
+
+        private static bool EsRegistroExistente(HttpStatusCode status, string body)
+        {
+            if (status == HttpStatusCode.Conflict) return true;
+            if (string.IsNullOrWhiteSpace(body)) return false;
+
+            return body.Contains("ya existe", StringComparison.OrdinalIgnoreCase) ||
+                   body.Contains("Registro duplicado", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string TryGetProducto(string jsonData)
+        {
+            try
+            {
+                var obj = JObject.Parse(jsonData);
+                // tu JSON SG2/SH3 tiene "producto"
+                return obj["producto"]?.ToString();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // =========================
+        // TU CÓDIGO EXISTENTE (sin cambios)
+        // =========================
 
         static string NormalizarCodigo(string codigo)
         {
@@ -103,27 +603,26 @@ namespace Web_Service
                 return codigo.Insert(3, "0");
             }
 
-            // Opcional: si es numérico y tiene <6 dígitos, completar a 6
-            //if (codigo.All(char.IsDigit) && codigo.Length < 6)
-            //    return codigo.PadLeft(6, '0');
-
             return codigo;
         }
 
-        public static string NormalizarCentroTrabajo(string centroTrabajo)
+        public static string NormalizarCentroTrabajo(string centroTrabajo, bool devolverVacioSiNull)
         {
             if (string.IsNullOrWhiteSpace(centroTrabajo))
-                return "000";  // valor por defecto si viene vacío
+                return devolverVacioSiNull ? "" : "000";
 
             // Dejar solo dígitos (por si viniera con espacios o caracteres)
             centroTrabajo = new string(centroTrabajo.Where(char.IsDigit).ToArray());
 
+            // Si luego de filtrar queda vacío, respetar la misma política
+            if (string.IsNullOrWhiteSpace(centroTrabajo))
+                return devolverVacioSiNull ? "" : "000";
+
             if (centroTrabajo.Length <= 3)
-                return centroTrabajo.PadLeft(3, '0');  // si tiene menos de 3 dígitos, completamos
+                return centroTrabajo.PadLeft(3, '0');   // completa a 3 dígitos
 
-            return centroTrabajo.Substring(centroTrabajo.Length - 3); // últimos 3 dígitos
+            return centroTrabajo.Substring(centroTrabajo.Length - 3); // últimos 3
         }
-
 
         //Consulta con Workarea y recurso hijo
         private const string consultaD_workarea_recurso = @"SELECT
@@ -132,9 +631,7 @@ namespace Web_Service
     wa.catalogueId  AS centroTrabajo,
     prod.productId  AS recurso, 
     op.catalogueId  AS Operacion,
-    ta.tiempo_segundos,
-    ta.tiempo_fmt   AS tiempo,
-    ta.lote_val     AS loteStd,
+	ta.allocated_time_centesimal AS allocated_time_centesimal,
     ROW_NUMBER() OVER (
         PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
         ORDER BY prod.productId
@@ -166,13 +663,7 @@ LEFT JOIN Operation op
 
 OUTER APPLY (
     SELECT TOP 1
-        uvud_time.value AS tiempo_segundos,
-        CASE
-            WHEN x2.t = 0.0 THEN '0.01'
-            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
-            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
-        END AS tiempo_fmt,
-        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
+        uvud_time.value AS allocated_time_centesimal
     FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
     JOIN AssociatedAttachment aa
        ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
@@ -182,80 +673,37 @@ OUTER APPLY (
     JOIN UserValue_UserData uvud_time
        ON uvud_time.id_Father = f_time.id_Table + 1
       AND uvud_time.title = 'allocated_time'
-    CROSS APPLY (
-        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
-    ) AS x2
 ) AS ta
+
 
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
 
         //Consulta para los xml que vienen sin WorkAreaOccurrence
         private const string ConsultaA_ConWorkArea_SinWAO = @"
-SELECT
-    p.catalogueId   AS Padre,
-    p.name          AS descripcion,
-    wa.catalogueId  AS centroTrabajo,
-    prod.productId  AS recurso, 
-    op.catalogueId  AS Operacion,
-    ta.tiempo_segundos,
-    ta.tiempo_fmt   AS tiempo,
-    ta.lote_val     AS loteStd,
-    ROW_NUMBER() OVER (
-        PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
-        ORDER BY prod.productId
-    ) AS nro_recurso
-FROM ProcessRevision        AS pr
-INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
-INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
-
--- WorkArea hija del PR
-INNER JOIN Occurrence             AS occ1 
-        ON occ1.parentRef = po.id_Table
-       AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
-INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
-INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
-
--- Recursos: hijos de la WorkArea sin usar WorkAreaOccurrence
-INNER JOIN Occurrence occ2        
-        ON occ2.parentRef   = occ1.id_Table
-INNER JOIN ProductRevision prod_rev 
-        ON prod_rev.id_Table = occ2.instancedRef
-INNER JOIN Product prod           
-        ON prod.id_Table     = prod_rev.masterRef
-
--- Operaciones
-LEFT JOIN ProcessOccurrence po_op 
-        ON po_op.parentRef = po.id_Table
-LEFT JOIN OperationRevision op_rev 
-        ON op_rev.id_Table = po_op.instancedRef
-LEFT JOIN Operation op 
-        ON op.id_Table = op_rev.masterRef
-
--- Tiempo por operación
-OUTER APPLY (
-    SELECT TOP 1
-        uvud_time.value AS tiempo_segundos,
-        CASE
-            WHEN x2.t = 0.0 THEN '0.01'
-            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
-            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
-        END AS tiempo_fmt,
-        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
-    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
-    JOIN AssociatedAttachment aa
-       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
-    JOIN Form f_time
-       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
-      AND f_time.subType = 'MEOpTimeAnalysis'
-    JOIN UserValue_UserData uvud_time
-       ON uvud_time.id_Father = f_time.id_Table + 1
-      AND uvud_time.title = 'allocated_time'
-    CROSS APPLY (
-        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
-    ) AS x2
-) AS ta
-
-ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
+SELECT p.catalogueId AS Padre, 
+p.name AS descripcion, 
+wa.catalogueId AS centroTrabajo, 
+prod.productId AS recurso, 
+op.catalogueId AS Operacion, 
+ta.allocated_time_centesimal AS allocated_time_centesimal, 
+ROW_NUMBER() OVER ( PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId ORDER BY prod.productId ) AS nro_recurso FROM ProcessRevision AS pr 
+INNER JOIN Process AS p ON p.id_Table = pr.masterRef 
+INNER JOIN ProcessOccurrence AS po ON po.instancedRef = pr.id_Table 
+-- WorkArea hija del PR 
+INNER JOIN Occurrence AS occ1 ON occ1.parentRef = po.id_Table AND occ1.subType IN ('MEWorkArea','MEWorkarea') INNER JOIN WorkAreaRevision AS war ON war.id_Table = occ1.instancedRef 
+INNER JOIN WorkArea AS wa ON wa.id_Table = war.masterRef 
+-- Recursos: hijos de la WorkArea sin usar WorkAreaOccurrence 
+INNER JOIN Occurrence occ2 ON occ2.parentRef = occ1.id_Table 
+INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef 
+INNER JOIN Product prod ON prod.id_Table = prod_rev.masterRef 
+-- Operaciones 
+LEFT JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef 
+LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef -- Tiempo por operación 
+OUTER APPLY ( SELECT TOP 1 uvud_time.value AS allocated_time_centesimal FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s JOIN AssociatedAttachment aa ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3) 
+JOIN Form f_time ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3) AND f_time.subType = 'MEOpTimeAnalysis' 
+JOIN UserValue_UserData uvud_time ON uvud_time.id_Father = f_time.id_Table + 1 AND uvud_time.title = 'allocated_time' ) AS ta
+GROUP BY p.catalogueId, p.name, wa.catalogueId, prod.productId, op.catalogueId, ta.allocated_time_centesimal
+ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC
 ";
 
         //Consulta para los xml que vienen sin WorkArea
@@ -265,11 +713,12 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
     NULL            AS centroTrabajo,          -- no hay WA
     prod.productId  AS recurso,                -- recurso real
 
-    uud.value               AS tiempo_segundos,
-    calc.tiempo_fmt         AS tiempo,
-    calc.lote_val           AS loteStd,
+    uud.value AS allocated_time_centesimal,
     op.catalogueId          AS Operacion,
-    ROW_NUMBER() OVER (PARTITION BY p.catalogueId ORDER BY op.catalogueId) AS nro_recurso
+    ROW_NUMBER() OVER (
+    PARTITION BY p.catalogueId, op.catalogueId
+    ORDER BY prod.productId
+) AS nro_recurso
 
 FROM ProcessRevision        AS pr
 JOIN Process                AS p
@@ -318,21 +767,9 @@ INNER JOIN Operation op
         ON op.id_Table = op_rev.masterRef
 
 -- Cálculo de tiempo
-CROSS APPLY (
-    SELECT t = COALESCE(TRY_CAST(uud.value AS float), 0.0)
-) AS x2
-CROSS APPLY (
-    SELECT
-        tiempo_fmt = CASE
-            WHEN x2.t = 0.0 THEN '0.01'
-            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
-            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
-        END,
-        lote_val = CASE WHEN x2.t < 60 THEN 60 ELSE 1 END
-) AS calc
+
 
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
-
 
         //Consulta para los xml que vienen con WorkArea que apunta directo a ProductRevision
         private const string ConsultaC_WorkAreaEspecial = @"
@@ -344,9 +781,12 @@ SELECT
     NULL            AS centroTrabajo,
     wa_inst.productId  AS recurso,     -- la máquina/estación como recurso
     op.catalogueId  AS Operacion,
-    ta.tiempo_segundos,
-    ta.tiempo_fmt   AS tiempo,
-    ta.lote_val     AS loteStd
+	ta.allocated_time_centesimal AS allocated_time_centesimal,
+	ROW_NUMBER() OVER (
+    PARTITION BY p.catalogueId, op.catalogueId
+    ORDER BY wa_inst.productId
+) AS nro_recurso
+
 
 FROM ProcessRevision pr
 JOIN Process p 
@@ -374,111 +814,21 @@ LEFT JOIN Operation op
 -- Tiempo por operación
 OUTER APPLY (
     SELECT TOP 1
-        uvud_time.value AS tiempo_segundos,
-        CASE
-            WHEN x2.t = 0.0 THEN '0.01'
-            WHEN x2.t < 60 THEN REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t * 60, 0), 108), ':', '.')
-            ELSE REPLACE(CONVERT(varchar(5), DATEADD(SECOND, x2.t, 0), 108), ':', '.')
-        END AS tiempo_fmt,
-        CASE WHEN x2.t < 60 THEN 60 ELSE 1 END AS lote_val
+        uvud_time.value AS allocated_time_centesimal
     FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
     JOIN AssociatedAttachment aa
-        ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
     JOIN Form f_time
-        ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
-       AND f_time.subType = 'MEOpTimeAnalysis'
+       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+      AND f_time.subType = 'MEOpTimeAnalysis'
     JOIN UserValue_UserData uvud_time
-        ON uvud_time.id_Father = f_time.id_Table + 1
-       AND uvud_time.title = 'allocated_time'
-    CROSS APPLY (
-        SELECT t = COALESCE(TRY_CAST(uvud_time.value AS float), 0.0)
-    ) AS x2
+       ON uvud_time.id_Father = f_time.id_Table + 1
+      AND uvud_time.title = 'allocated_time'
 ) AS ta
+
 
 ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 ";
-
-
-
-        //public static string ObtenerConsultaRecursos(SqlConnection connection)
-        //{
-        //    bool hayWorkArea = false;
-        //    bool esWorkAreaNormal = false;
-        //    bool esWorkAreaEspecial = false;
-        //    bool existeTablaWAO = false;
-
-        //    // ¿Existe físicamente la tabla WorkArea?
-        //    // Si existe, este XML tenía nodo <WorkArea>
-        //    using (var cmd = new SqlCommand(
-        //        "SELECT OBJECT_ID('WorkArea', 'U');", connection))
-        //    {
-        //        var res = cmd.ExecuteScalar();
-        //        hayWorkArea = (res != null && res != DBNull.Value);
-        //    }
-
-        //    if (hayWorkArea)
-        //    {
-        //        // Caso A: MEWorkArea -> WorkAreaRevision
-        //        using (var cmd = new SqlCommand(@"
-        //    SELECT TOP 1 1
-        //    FROM Occurrence o
-        //    JOIN WorkAreaRevision war ON war.id_Table = o.instancedRef
-        //    WHERE o.subType = 'MEWorkArea';", connection))
-        //        {
-        //            var res = cmd.ExecuteScalar();
-        //            esWorkAreaNormal = (res != null && res != DBNull.Value);
-        //        }
-
-        //        // Caso C: MEWorkArea -> ProductRevision directo
-        //        using (var cmd = new SqlCommand(@"
-        //    SELECT TOP 1 1
-        //    FROM Occurrence o
-        //    JOIN ProductRevision pr ON pr.id_Table = o.instancedRef
-        //    WHERE o.subType = 'MEWorkArea';", connection))
-        //        {
-        //            var res = cmd.ExecuteScalar();
-        //            esWorkAreaEspecial = (res != null && res != DBNull.Value);
-        //        }
-
-        //        // ¿Existe físicamente la tabla WorkAreaOccurrence?
-        //        using (var cmd = new SqlCommand(
-        //            "SELECT OBJECT_ID('WorkAreaOccurrence', 'U');", connection))
-        //        {
-        //            var res = cmd.ExecuteScalar();
-        //            existeTablaWAO = (res != null && res != DBNull.Value);
-        //        }
-        //    }
-
-        //    Utilidades.EscribirEnLog(
-        //        "ObtenerQueryRecursos -> hayWorkArea=" + hayWorkArea +
-        //        ", normal=" + esWorkAreaNormal +
-        //        ", especial=" + esWorkAreaEspecial +
-        //        ", existeWAO=" + existeTablaWAO);
-
-        //    Utilidades.EscribirEnLog("Query elegida: " +
-        //        (!hayWorkArea ? "B" :
-        //         esWorkAreaNormal && existeTablaWAO ? "A_WAO" :
-        //         esWorkAreaNormal && !existeTablaWAO ? "A_SinWAO" :
-        //         esWorkAreaEspecial ? "C" : "NINGUNA"));
-
-        //    // 🔀 Selección de consulta según combinación detectada
-
-        //    if (!hayWorkArea)
-        //        return consultaB_sin_workarea;              // sin WorkArea
-
-        //    if (esWorkAreaNormal)
-        //    {
-        //        if (existeTablaWAO)
-        //            return consultaD_workarea_recurso;      // usa WorkAreaOccurrence (A_WAO)
-        //        else
-        //            return ConsultaA_ConWorkArea_SinWAO;   // sin WorkAreaOccurrence (A_SinWAO)
-        //    }
-
-        //    if (esWorkAreaEspecial)
-        //        return ConsultaC_WorkAreaEspecial;         // MEWorkArea -> ProductRevision (C)
-
-        //    throw new Exception("No se pudo determinar el tipo de WorkArea para este XML.");
-        //}
 
         public static string ObtenerConsultaRecursos(SqlConnection connection)
         {
@@ -576,15 +926,10 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             throw new Exception("No se pudo determinar el tipo de WorkArea para este XML.");
         }
 
-
-
         public static List<string> jsonSG2_SH3()
         {
-            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-            //                          Integrated Security=True;TrustServerCertificate=True";
-
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
             List<string> jsonProductos = new List<string>();
             Utilidades.EscribirEnLog("jsonSG2_SH3 -> entrando al método");
@@ -595,44 +940,36 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                 {
                     connection.Open();
                     Utilidades.EscribirEnLog("jsonSG2_SH3 -> conexión abierta");
+
                     string query = ObtenerConsultaRecursos(connection);
-                    Utilidades.EscribirEnLog("jsonSG2_SH3 -> query elegida:\n" + query);
                     SqlCommand command = new SqlCommand(query, connection);
                     SqlDataReader reader = command.ExecuteReader();
 
                     int filas = 0;
                     Dictionary<string, dynamic> productosDict = new Dictionary<string, dynamic>();
-                    //Dictionary<string, Dictionary<string, int>> productoRecursoOperacion = new Dictionary<string, Dictionary<string, int>>();
                     var procPorProductoOperacion = new Dictionary<string, Procedimiento>();
                     var ultimoPasoPorProducto = new Dictionary<string, int>();
 
                     while (reader.Read())
                     {
-                       
                         filas++;
-                        // DEBUG: logueamos la primera fila para ver qué trae
-                        if (filas <= 3)
-                        {
-                            Utilidades.EscribirEnLog(
-                                $"jsonSG2_SH3 -> fila {filas}: Padre={reader["Padre"]}, recurso={reader["recurso"]}, op={reader["Operacion"]}, tiempo={reader["tiempo"]}");
-                        }
+
+                        // Campos base
                         string padrePr = reader["Padre"]?.ToString()?.Trim();
                         if (string.IsNullOrWhiteSpace(padrePr))
                             continue;
 
-                        // Por defecto NO recorto nada
+                        string operacion = reader["Operacion"]?.ToString()?.Trim();
+                        if (string.IsNullOrWhiteSpace(operacion))
+                            continue; // evita keyProc inválida
+
                         string producto = padrePr;
 
-                        // Solo recorto si realmente es "P-xxxxxx"
                         if (padrePr.Length > 2 && padrePr.StartsWith("P-", StringComparison.OrdinalIgnoreCase))
-                        {
-                            producto = padrePr.Substring(2); // "P-012345" -> "012345"
-                        }
+                            producto = padrePr.Substring(2);
 
-                        // Si este PR es el que se excluyó en SG1, en SG2 debe colgar de P-xxxxxx
                         if (Sg1Exclusions.TryGetProcessForExcludedPr(padrePr, out var procesoP) && !string.IsNullOrWhiteSpace(procesoP))
                         {
-                            // procesoP viene "P-066650" => recorto también
                             producto = (procesoP.Length > 2 && procesoP.StartsWith("P-", StringComparison.OrdinalIgnoreCase))
                                 ? procesoP.Substring(2)
                                 : procesoP;
@@ -640,72 +977,71 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                             Utilidades.EscribirEnLog($"SG2_SH3 -> PR excluido detectado: {padrePr} => producto={producto}");
                         }
 
-
-                        string codigo = "01";
-
-                        string tiempo = reader["tiempo"]?.ToString().Replace(',', '.');
-                        if (decimal.TryParse(tiempo, NumberStyles.Any, CultureInfo.InvariantCulture, out var valorDecimal))
-                        {
-                            tiempo = valorDecimal.ToString("0.##", CultureInfo.InvariantCulture);
-                        }
-
-                        // Blind-guard por si viniera vacío o 0
-                        if (string.IsNullOrWhiteSpace(tiempo) || tiempo == "0" || tiempo == "0.00" || tiempo == "00.00")
-                            tiempo = "00.01";   // cumple la regla de Protheus
-
-
                         string recurso = reader["recurso"]?.ToString();
                         recurso = NormalizarCodigo(recurso);
+
                         string nombreOperacion = reader["descripcion"]?.ToString();
-                        string lote = reader["loteStd"]?.ToString();
+
                         string centroTrabajo = reader["centroTrabajo"]?.ToString();
-                        centroTrabajo = NormalizarCentroTrabajo(centroTrabajo);
-                        string operacion = reader["Operacion"]?.ToString();
+                        centroTrabajo = NormalizarCentroTrabajo(centroTrabajo, devolverVacioSiNull: true);
 
-                        int nroRecurso = Convert.ToInt32(reader["nro_recurso"]);                     
+                        int nroRecurso = 1;
+                        try
+                        {
+                            nroRecurso = Convert.ToInt32(reader["nro_recurso"]);
+                        }
+                        catch
+                        {
+                            nroRecurso = 1;
+                        }
 
-                        
+                        // OJO: aunque el alias diga "centesimal", acá viene en SEGUNDOS por pieza (XML).
+                        string rawSeconds = reader["allocated_time_centesimal"]?.ToString();
+                        var calc = CalcularTiempoYLoteDesdeSegundos(rawSeconds, producto, operacion);
 
-                        //clave unica para cada op
+                        string tiempo = calc.TiempoHHMM;                  // "HH.MM"
+                        string lote = calc.LoteStd.ToString(CultureInfo.InvariantCulture);
+
+                        if (filas <= 3)
+                        {
+                            Utilidades.EscribirEnLog(
+                                $"jsonSG2_SH3 -> fila {filas}: Padre={padrePr}, recurso={recurso}, op={operacion}, rawSeconds={rawSeconds}, tiempo={tiempo}, lote={lote}, aprox={calc.EsAprox}");
+                        }
+
+                        if (calc.EsAprox)
+                        {
+                            Utilidades.EscribirEnLog(
+                                $"[SG2SH3][TIEMPO] Aprox por límite 99.59 | prod={producto} op={operacion} rawSeconds={rawSeconds} minDec={calc.MinutosDecimalesOriginal} seg={calc.SegundosPorPieza} lote={lote} tiempo={tiempo} err%={calc.ErrorPct:0.0000}");
+                        }
+
+                        string codigo = "01";
                         string keyProc = producto + "_" + operacion;
 
                         if (!procPorProductoOperacion.ContainsKey(keyProc))
                         {
                             int operacionActual = 10;
-                            if (ultimoPasoPorProducto.ContainsKey(producto))
-                            {
-                                operacionActual = ultimoPasoPorProducto[producto] + 10;
-                            }
+                            if (ultimoPasoPorProducto.TryGetValue(producto, out var ult))
+                                operacionActual = ult + 10;
+
                             ultimoPasoPorProducto[producto] = operacionActual;
                             string operacionPaso = operacionActual.ToString("D2");
 
                             var nuevoProc = new Procedimiento
                             {
                                 detalle = new List<CampoValor>
-                                    {
-                                        new CampoValor { campo = "operacion",   valor = operacionPaso },
-                                        new CampoValor { campo = "recurso",     valor = "" },  // se completa con el principal
-                                        new CampoValor { campo = "tiempo",      valor = tiempo },
-                                        new CampoValor { campo = "centroTrabajo", valor = centroTrabajo },
-                                        new CampoValor { campo = "descripcion", valor = nombreOperacion },
-                                        new CampoValor { campo = "loteStd",     valor = lote }
-                                    },
-                                alternativos = new List<List<CampoValor>>()   // <-- cambio acá
+                        {
+                            new CampoValor { campo = "operacion",     valor = operacionPaso },
+                            new CampoValor { campo = "recurso",       valor = "" },
+                            new CampoValor { campo = "tiempo",        valor = tiempo },
+                            new CampoValor { campo = "centroTrabajo", valor = centroTrabajo },
+                            new CampoValor { campo = "descripcion",   valor = nombreOperacion },
+                            new CampoValor { campo = "loteStd",       valor = lote }
+                        },
+                                alternativos = new List<List<CampoValor>>()
                             };
 
                             procPorProductoOperacion[keyProc] = nuevoProc;
 
-                            //if (!productosDict.ContainsKey(producto))
-                            //{
-                            //    productosDict[producto] = new
-                            //    {
-                            //        codigo = codigo,
-                            //        producto = producto,
-                            //        procedimiento = new List<Procedimiento>()
-                            //    };
-                            //}
-
-                            //productosDict[producto].procedimiento.Add(nuevoProc);
                             if (productosDict.ContainsKey(producto))
                             {
                                 productosDict[producto].procedimiento.Add(nuevoProc);
@@ -725,48 +1061,32 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
                         if (nroRecurso == 1)
                         {
-                            // Recurso principal
-                            var campoRecurso = proc.detalle.First(x => x.campo == "recurso");
-                            campoRecurso.valor = recurso;
+                            proc.detalle.First(x => x.campo == "recurso").valor = recurso;
 
-                            var campoTiempo = proc.detalle.First(x => x.campo == "tiempo");
-                            campoTiempo.valor = tiempo;
+                            // por si la primera fila vino sin tiempo, nos aseguramos de setearlo con el cálculo actual
+                            proc.detalle.First(x => x.campo == "tiempo").valor = tiempo;
+                            proc.detalle.First(x => x.campo == "loteStd").valor = lote;
                         }
                         else
                         {
-                            // Recurso alternativo: cada alternativo es UNA lista de CampoValor
                             var alternativo = new List<CampoValor>
-                            {
-                                new CampoValor { campo = "recursoAlt", valor = recurso },
-                                new CampoValor { campo = "tipoAlt",    valor = "A" }
-                            };
+                    {
+                        new CampoValor { campo = "recursoAlt", valor = recurso },
+                        new CampoValor { campo = "tipoAlt",    valor = "A" }
+                    };
 
                             proc.alternativos.Add(alternativo);
                         }
-
-
-
                     }
-
-                    // DEBUG: contar filas por Padre real
-                    var countPorPadre = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-                 
-
-                    // luego del while:
-                    foreach (var kv in countPorPadre.OrderByDescending(x => x.Value).Take(30))
-                        Utilidades.EscribirEnLog($"SG2_SH3 -> filas por Padre: {kv.Key} = {kv.Value}");
-
 
                     Utilidades.EscribirEnLog($"jsonSG2_SH3 -> filas leídas de la query: {filas}");
                     Utilidades.EscribirEnLog($"jsonSG2_SH3 -> productosDict.Count = {productosDict.Count}");
-
 
                     foreach (var item in productosDict.Values)
                     {
                         string json = JsonConvert.SerializeObject(item, Formatting.Indented);
                         Console.WriteLine(json);
-                        Utilidades.EscribirEnLog("jsonSG2_SH3 -> JSON generado:\n" + json);
+                        Utilidades.EscribirJSONEnLog("jsonSG2_SH3 -> JSON generado:\n" + json);
                         jsonProductos.Add(json);
                     }
                 }
@@ -778,19 +1098,13 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             }
 
             return jsonProductos;
-
         }
-
 
 
         public static List<string> jsonSB1_BOP()
         {
-            //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-            //                            Integrated Security=True;TrustServerCertificate=True";
-
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            // 1) Batch para endurecer el esquema (idempotente)
+            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
             const string schemaPatch = @"
                                         SET NOCOUNT ON;
                                         SET XACT_ABORT ON;
@@ -866,8 +1180,6 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                                         COMMIT;
                                         ";
 
-
-
             string query = @"WITH FirstProcess_codigo AS(
                             SELECT RIGHT(catalogueId,6) first_process_name
                           FROM Process p
@@ -889,13 +1201,12 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             CROSS JOIN FirstProcess_codigo fpn
             INNER JOIN OperationRevision OpR ON OpR.masterRef = o.id_Table
             INNER JOIN ProcessOccurrence po ON po.instancedRef = OpR.id_Table
-            --INNER JOIN Form f ON f.name = CONCAT(o.catalogueId, '/', OpR.revision)
             CROSS APPLY (
               SELECT CASE
                        WHEN RIGHT(o.catalogueId, 3) = '-OP'
-                            THEN LEFT(o.catalogueId, LEN(o.catalogueId) - 3)  -- quita ""-OP""
+                            THEN LEFT(o.catalogueId, LEN(o.catalogueId) - 3)
                        WHEN CHARINDEX('-OP', o.catalogueId) > 0
-                            THEN REPLACE(o.catalogueId, '-OP', '')             -- más defensivo
+                            THEN REPLACE(o.catalogueId, '-OP', '')
                        ELSE o.catalogueId
                      END AS op_code_base
             ) AS x
@@ -939,8 +1250,7 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             GROUP BY productId, pr.revision, pr.name, fpn.first_process_name, pr.subType
 			ORDER BY uud2.value DESC, p.catalogueId DESC";
 
-
-            var productosDict = new Dictionary<string, string>(); // codigo -> json
+            var productosDict = new Dictionary<string, string>();
 
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
@@ -960,24 +1270,18 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
                         var producto = new
                         {
                             producto = new List<Dictionary<string, string>>
-                    {
-                        new() { { "campo", "codigo"      }, { "valor", codigo      } },
-                        new() { { "campo", "descripcion" }, { "valor", descripcion } },
-                        new() { { "campo", "tipo"        }, { "valor", tipo        } },
-                        new() { { "campo", "deposito"    }, { "valor", deposito    } },
-                        new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
-                        new() { { "campo", "revEstruct"  }, { "valor", revision    } },
-                    }
+                            {
+                                new() { { "campo", "codigo"      }, { "valor", codigo      } },
+                                new() { { "campo", "descripcion" }, { "valor", descripcion } },
+                                new() { { "campo", "tipo"        }, { "valor", tipo        } },
+                                new() { { "campo", "deposito"    }, { "valor", deposito    } },
+                                new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
+                                new() { { "campo", "revEstruct"  }, { "valor", revision    } },
+                            }
                         };
 
                         string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
-
-                        // Quedarse con el último para ese código:
                         productosDict[codigo] = jsonData;
-
-                        // Si preferís el primero, usá:
-                        // if (!productosDict.ContainsKey(codigo))
-                        //     productosDict[codigo] = jsonData;
                     }
                 }
             }
@@ -987,12 +1291,10 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             Utilidades.EscribirEnLog($"SB1_BOP -> códigos únicos: {lista.Count}");
             return lista;
         }
+
         public class Procedimiento
         {
             public List<CampoValor> detalle { get; set; }
-
-            // Antes: public List<CampoValor> alternativos { get; set; }
-            // Ahora: lista de listas para cumplir con el formato del WS
             public List<List<CampoValor>> alternativos { get; set; }
         }
 
@@ -1001,6 +1303,5 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
             public string campo { get; set; }
             public string valor { get; set; }
         }
-
     }
 }

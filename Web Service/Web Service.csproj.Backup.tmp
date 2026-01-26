@@ -11,10 +11,8 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
-
-    <!-- Para MutexSecurity / MutexAccessRule en .NET -->
-    <PackageReference Include="System.Security.AccessControl" Version="6.0.0" />
-    <PackageReference Include="System.Threading.AccessControl" Version="6.0.0" />
+    <PackageReference Include="System.Security.AccessControl" Version="6.0.1" />
+    <PackageReference Include="System.Threading.AccessControl" Version="10.0.2" />
   </ItemGroup>
 
 </Project>
