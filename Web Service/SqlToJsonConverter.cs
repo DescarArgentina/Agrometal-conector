@@ -97,22 +97,27 @@
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
+
                 using (var cmd = new SqlCommand(sqlQuery, conn))
-                using (var rdr = cmd.ExecuteReader())
                 {
-                    while (rdr.Read())
+                    cmd.CommandTimeout = 300; // 300 segundos
+
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        records.Add(new SqlRecord
+                        while (rdr.Read())
                         {
-                            Process_codigo = GetString(rdr, "Process_codigo"),
-                            PR_Codigo = GetString(rdr, "PR_Codigo"),
-                            Codigo = GetString(rdr, "Codigo"),
-                            Cantidad = GetDouble(rdr, "Cantidad"),
-                            Subtype = GetString(rdr, "subType"),
-                            NumBusqueda = GetInt(rdr, "num_busqueda"), // si es alfanumérico (ej 481703X) queda 0
-                            WorkAreaId = GetString(rdr, "WorkArea_CatalogueId"),
-                            Nombre_WA = GetString(rdr, "WorkArea_Nombre")
-                        });
+                            records.Add(new SqlRecord
+                            {
+                                Process_codigo = GetString(rdr, "Process_codigo"),
+                                PR_Codigo = GetString(rdr, "PR_Codigo"),
+                                Codigo = GetString(rdr, "Codigo"),
+                                Cantidad = GetDouble(rdr, "Cantidad"),
+                                Subtype = GetString(rdr, "subType"),
+                                NumBusqueda = GetInt(rdr, "num_busqueda"),
+                                WorkAreaId = GetString(rdr, "WorkArea_CatalogueId"),
+                                Nombre_WA = GetString(rdr, "WorkArea_Nombre")
+                            });
+                        }
                     }
                 }
             }

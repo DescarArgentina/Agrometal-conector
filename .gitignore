@@ -9,3 +9,8 @@ obj/
 
 # Otros temporales
 *.logWeb Service.zip
+
+# Comprimidos
+*.zip
+*.rar
+*.7zip

@@ -117,7 +117,7 @@ ORDER BY padre.catalogueId, hijo.catalogueId;";
                     connection.Open();
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.CommandTimeout = 360;
+                        command.CommandTimeout = 300;
                         using (SqlDataReader reader = command.ExecuteReader())
                         {
                             int fileCount = 0;

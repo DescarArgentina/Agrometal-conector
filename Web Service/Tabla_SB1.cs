@@ -32,10 +32,7 @@ WITH CTE_Hierarchy AS (
         pr.revision,
         pr.subType,
         o.idXml,
-
-        -- columnas alineadas con SB1
         'PA' AS Tipo,
-        '01' AS Deposito,
         CASE
             WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
             WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
@@ -43,17 +40,12 @@ WITH CTE_Hierarchy AS (
             WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
             ELSE 'UN'
         END AS unMedida,
-
-        -- WorkArea asociada al proceso (si existe)
         waData.WorkArea_CatalogueId,
         waData.WorkArea_Nombre,
         waData.WorkArea_Revision
-
     FROM ProcessOccurrence o
     INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
     INNER JOIN Process p          ON pr.masterRef   = p.id_Table
-
-    -- Unidad de medida
     LEFT JOIN Form fUnidad
         ON p.catalogueId = CASE
             WHEN CHARINDEX('/', fUnidad.name) > 0
@@ -63,8 +55,6 @@ WITH CTE_Hierarchy AS (
     LEFT JOIN UserValue_UserData uudUnidad
         ON fUnidad.id_Table + 9 = uudUnidad.id_Father
        AND p.idXml = uudUnidad.idXml
-
-    -- WorkArea del proceso (opcional)
     OUTER APPLY (
         SELECT TOP 1
             wa.catalogueId AS WorkArea_CatalogueId,
@@ -83,7 +73,6 @@ WITH CTE_Hierarchy AS (
 ),
 
 CTE_Niveles AS (
-    -- Nivel 0 → nodos raíz
     SELECT
         h.*,
         0 AS Nivel
@@ -92,7 +81,6 @@ CTE_Niveles AS (
 
     UNION ALL
 
-    -- Niveles siguientes (hijos)
     SELECT
         h.*,
         n.Nivel + 1
@@ -100,136 +88,104 @@ CTE_Niveles AS (
     INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
 )
 
--- 🟢 PRIMERA PARTE: jerarquía de procesos / PR
 SELECT
     COALESCE(Parent.name, '')        AS Nombre_Padre,
     COALESCE(Parent.catalogueId, '') AS Process_codigo,
-
     CASE
         WHEN LEFT(Child.catalogueId, 2) = 'PR'
             THEN Child.name + ' - Proceso: ' + COALESCE(Parent.catalogueId, '')
         ELSE Child.name
     END AS Nombre_Hijo,
-
-    Child.catalogueId  AS Codigo_Hijo,
+    cod1.CodigoHijoProtheus AS Codigo_Hijo,
     Child.subType      AS Subtype_Hijo,
     Child.revision     AS Revision,
     1                  AS CantidadHijo_Total,
     nChild.Nivel       AS Nivel,
-
-    -- Tipo calculado
     CASE
-        -- PR de terceros: PRxxxxxT
-        WHEN LEFT(Child.catalogueId, 2) = 'PR'
-         AND RIGHT(Child.catalogueId, 1) = 'T'
+        WHEN LEFT(cod1.CodigoHijoProtheus, 2) = 'PR'
+         AND RIGHT(cod1.CodigoHijoProtheus, 1) = 'T'
             THEN 'SV'
-
-        -- PR con WorkArea de Terceros
-        WHEN LEFT(Child.catalogueId, 2) = 'PR'
-         AND (
-                Child.WorkArea_CatalogueId = '000465'
-                OR Child.WorkArea_Nombre = 'Terceros'
-             )
-            THEN 'SV'
-
-        -- Comprado o materia prima
         WHEN Child.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
             THEN 'MP'
-
-        -- Producto intermedio (PR)
         WHEN LEFT(Child.catalogueId, 2) = 'PR'
             THEN 'PI'
-
-        -- Default
         ELSE 'PA'
     END AS Tipo,
-
-    Child.Deposito,
     Child.unMedida,
     Child.WorkArea_CatalogueId,
     Child.WorkArea_Nombre,
     Child.WorkArea_Revision
-
 FROM CTE_Niveles nChild
 LEFT JOIN CTE_Niveles  nParent ON nChild.parentRef = nParent.id_Table
 LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
 LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
+CROSS APPLY (
+    SELECT
+        CASE
+            WHEN Child.catalogueId IS NOT NULL
+             AND LEFT(Child.catalogueId, 2) = 'PR'
+             AND RIGHT(Child.catalogueId, 1) <> 'T'
+             AND (
+                    Child.WorkArea_CatalogueId = '000465'
+                    OR UPPER(LTRIM(RTRIM(Child.WorkArea_Nombre))) = 'TERCEROS'
+                 )
+                THEN Child.catalogueId + 'T'
+            ELSE Child.catalogueId
+        END AS CodigoHijoProtheus
+) AS cod1
 
 UNION ALL
 
--- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad y WorkArea
 SELECT
     Operation.name   AS Nombre_Padre,
     p2.catalogueId   AS Process_codigo,
-
     CASE
         WHEN LEFT(x.CodigoNorm, 2) = 'PR'
             THEN p.name + '- Proceso: ' + COALESCE(p2.catalogueId, '')
         ELSE p.name
     END AS Nombre_Hijo,
-
-    x.CodigoNorm AS Codigo_Hijo,
-
+    cod2.CodigoHijoProtheus AS Codigo_Hijo,
     pr.subType   AS Subtype_Hijo,
     pr.revision  AS Revision,
     COUNT(p.productId) AS CantidadHijo_Total,
     3 AS Nivel,
-
     CASE
-        -- PR de terceros: PRxxxxxT
-        WHEN LEFT(x.CodigoNorm, 2) = 'PR'
-         AND RIGHT(x.CodigoNorm, 1) = 'T'
+        WHEN LEFT(cod2.CodigoHijoProtheus, 2) = 'PR'
+         AND RIGHT(cod2.CodigoHijoProtheus, 1) = 'T'
             THEN 'SV'
-
-        -- PR con WorkArea de Terceros
-        WHEN LEFT(x.CodigoNorm, 2) = 'PR'
-         AND (
-                waData2.WorkArea_CatalogueId = '000465'
-                OR waData2.WorkArea_Nombre = 'Terceros'
-             )
-            THEN 'SV'
-
-        -- Comprado
         WHEN pr.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
             THEN 'MP'
-
-        -- Producto intermedio (PR)
         WHEN LEFT(x.CodigoNorm, 2) = 'PR'
             THEN 'PI'
-
-        -- Default
         ELSE 'PA'
     END AS Tipo,
-
-    '01' AS Deposito,
-
-    MAX(
-        CASE
-            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
-            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
-            ELSE 'UN'
-        END
+    COALESCE(
+        NULLIF(MAX(
+            CASE
+                WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
+                WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
+                WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
+                WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
+                ELSE NULL
+            END
+        ),''),
+        NULLIF(MAX(uomTagProd.ValueTag),''),
+        MAX(uomUnitProd.UnidadMedida),
+        'UN'
     ) AS unMedida,
-
     waData2.WorkArea_CatalogueId,
     waData2.WorkArea_Nombre,
     waData2.WorkArea_Revision
-
 FROM Occurrence
 INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
 INNER JOIN Product p          ON p.id_Table  = pr.masterRef
-
 LEFT JOIN ProcessOccurrence o   ON Occurrence.parentRef = o.id_Table
 LEFT JOIN OperationRevision op  ON op.id_Table = o.instancedRef
 LEFT JOIN Operation            ON Operation.id_Table = op.masterRef
-
 LEFT JOIN ProcessOccurrence o2  ON o2.id_Table = o.parentRef
 LEFT JOIN ProcessRevision pr2   ON o2.instancedRef = pr2.id_Table
 LEFT JOIN Process p2            ON pr2.masterRef = p2.id_Table
 
--- Unidad de medida
 LEFT JOIN Form fUnidad2
     ON p2.catalogueId = CASE
         WHEN CHARINDEX('/', fUnidad2.name) > 0
@@ -240,7 +196,97 @@ LEFT JOIN UserValue_UserData uudUnidad2
     ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
    AND p2.idXml = uudUnidad2.idXml
 
--- WorkArea asociada al proceso padre (pr2)
+OUTER APPLY (
+    SELECT TOP 1 s.ValueTag, s.DataRef, s.UnitIdTable
+    FROM (
+        SELECT
+            uvp.value AS ValueTag,
+            uvp.dataRef AS DataRef,
+            TRY_CONVERT(int, REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(uvp.dataRef)),'#',''),'ID',''),'id','')) AS UnitIdTable,
+            1 AS prio
+        FROM UserValue_Product uvp
+        WHERE uvp.idXml = p.idXml
+          AND uvp.title = 'uom_tag'
+          AND uvp.id_Father = p.id_Table
+
+        UNION ALL
+
+        SELECT
+            uvp2.value,
+            uvp2.dataRef,
+            TRY_CONVERT(int, REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(uvp2.dataRef)),'#',''),'ID',''),'id','')),
+            2
+        FROM UserData udp
+        INNER JOIN UserValue_Product uvp2
+            ON uvp2.id_Father = udp.id_Table
+           AND uvp2.idXml     = udp.idXml
+        WHERE udp.idXml = p.idXml
+          AND udp.id_Father = p.id_Table
+          AND uvp2.title = 'uom_tag'
+    ) s
+    ORDER BY s.prio
+) AS uomTagProd
+
+OUTER APPLY (
+    SELECT TOP 1 t.UnidadMedida
+    FROM (
+        SELECT
+            CASE
+                WHEN uvu.title = 'Agm4_Kilogramos' THEN uvu.value
+                WHEN uvu.title = 'Agm4_Litros'     THEN uvu.value
+                WHEN uvu.title = 'Agm4_Metros'     THEN uvu.value
+                WHEN uvu.title = 'Agm4_Unidad'     THEN uvu.value
+                ELSE NULL
+            END AS UnidadMedida,
+            CASE uvu.title
+                WHEN 'Agm4_Kilogramos' THEN 1
+                WHEN 'Agm4_Litros'     THEN 2
+                WHEN 'Agm4_Metros'     THEN 3
+                WHEN 'Agm4_Unidad'     THEN 4
+                ELSE 99
+            END AS prio
+        FROM Unit u
+        INNER JOIN UserValue_Unit uvu
+            ON uvu.id_Father = u.id_Table
+           AND uvu.idXml     = u.idXml
+        WHERE u.idXml = p.idXml
+          AND uomTagProd.UnitIdTable IS NOT NULL
+          AND u.id_Table = uomTagProd.UnitIdTable
+          AND uvu.title IN ('Agm4_Unidad','Agm4_Kilogramos','Agm4_Litros','Agm4_Metros')
+
+        UNION ALL
+
+        SELECT
+            CASE
+                WHEN uuv.title = 'Agm4_Kilogramos' THEN uuv.value
+                WHEN uuv.title = 'Agm4_Litros'     THEN uuv.value
+                WHEN uuv.title = 'Agm4_Metros'     THEN uuv.value
+                WHEN uuv.title = 'Agm4_Unidad'     THEN uuv.value
+                ELSE NULL
+            END,
+            CASE uuv.title
+                WHEN 'Agm4_Kilogramos' THEN 11
+                WHEN 'Agm4_Litros'     THEN 12
+                WHEN 'Agm4_Metros'     THEN 13
+                WHEN 'Agm4_Unidad'     THEN 14
+                ELSE 199
+            END
+        FROM Unit u
+        INNER JOIN UserData ud_u
+            ON ud_u.id_Father = u.id_Table
+           AND ud_u.idXml     = u.idXml
+        INNER JOIN UserValue_UserData uuv
+            ON uuv.id_Father = ud_u.id_Table
+           AND uuv.idXml     = ud_u.idXml
+        WHERE u.idXml = p.idXml
+          AND uomTagProd.UnitIdTable IS NOT NULL
+          AND u.id_Table = uomTagProd.UnitIdTable
+          AND uuv.title IN ('Agm4_Unidad','Agm4_Kilogramos','Agm4_Litros','Agm4_Metros')
+    ) t
+    WHERE t.UnidadMedida IS NOT NULL AND LTRIM(RTRIM(t.UnidadMedida)) <> ''
+    ORDER BY t.prio
+) AS uomUnitProd
+
 OUTER APPLY (
     SELECT TOP 1
         wa.catalogueId AS WorkArea_CatalogueId,
@@ -257,7 +303,6 @@ OUTER APPLY (
     WHERE po_wa.instancedRef = pr2.id_Table
 ) AS waData2
 
--- Código hijo normalizado
 CROSS APPLY (
     SELECT
         CASE
@@ -267,9 +312,22 @@ CROSS APPLY (
         END AS CodigoNorm
 ) AS x
 
+CROSS APPLY (
+    SELECT
+        CASE
+            WHEN x.CodigoNorm IS NOT NULL
+             AND LEFT(x.CodigoNorm, 2) = 'PR'
+             AND RIGHT(x.CodigoNorm, 1) <> 'T'
+             AND (
+                    waData2.WorkArea_CatalogueId = '000465'
+                    OR UPPER(LTRIM(RTRIM(waData2.WorkArea_Nombre))) = 'TERCEROS'
+                 )
+                THEN x.CodigoNorm + 'T'
+            ELSE x.CodigoNorm
+        END AS CodigoHijoProtheus
+) AS cod2
+
 WHERE
-    -- ✅ FIX: además de MEConsumed explícito, incluir consumos cuyo subType venga NULL/vacío
-    -- siempre que el padre sea una operación (op != NULL)
     (
         Occurrence.subType = 'MEConsumed'
         OR (
@@ -287,18 +345,53 @@ GROUP BY
     pr.revision,
     waData2.WorkArea_CatalogueId,
     waData2.WorkArea_Nombre,
-    waData2.WorkArea_Revision
+    waData2.WorkArea_Revision,
+    cod2.CodigoHijoProtheus
 
 ORDER BY
     Nivel,
     Codigo_Hijo DESC;
     ";
         private const string consultaSB1_BOP_SinWorkArea = @"
-WITH CTE_Hierarchy AS ( 
-    SELECT DISTINCT
+WITH UNIT_VALUES AS (
+    SELECT
+        TRY_CONVERT(BIGINT, u.id_Table) AS UnitId,
+        uv.title,
+        uv.value
+    FROM Unit u
+    LEFT JOIN UserValue_Unit uv
+        ON uv.id_Father = u.id_Table
+
+    UNION ALL
+
+    SELECT
+        TRY_CONVERT(BIGINT, u.id_Table) AS UnitId,
+        uv2.title,
+        uv2.value
+    FROM Unit u
+    INNER JOIN UserData ud
+        ON ud.id_Father = u.id_Table
+    INNER JOIN UserValue_UserData uv2
+        ON uv2.id_Father = ud.id_Table
+),
+UNIT_MAP AS (
+    SELECT
+        UnitId,
+        COALESCE(
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Kilogramos' THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Litros'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Metros'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Unidad'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'uom_tag'         THEN value END), '')
+        ) AS UnidadMedida
+    FROM UNIT_VALUES
+    GROUP BY UnitId
+),
+CTE_Hierarchy AS (
+    SELECT
         o.id_Table,
         pr.name,
-        CASE 
+        CASE
             WHEN LEFT(p.catalogueId, 2) = 'P-'
                 THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
             ELSE p.catalogueId
@@ -307,41 +400,16 @@ WITH CTE_Hierarchy AS (
         pr.revision,
         pr.subType,
         o.idXml,
-
-        -- columnas alineadas con SB1
         'PA' AS Tipo,
-        '01' AS Deposito,
-        CASE
-            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
-            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
-            ELSE 'UN'
-        END AS unMedida,
-
-        -- WorkArea (SIN USO): dejar NULL
+        'UN' AS unMedida,
         CAST(NULL AS varchar(50))  AS WorkArea_CatalogueId,
         CAST(NULL AS varchar(255)) AS WorkArea_Nombre,
         CAST(NULL AS varchar(20))  AS WorkArea_Revision
-
     FROM ProcessOccurrence o
     INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
     INNER JOIN Process p          ON pr.masterRef   = p.id_Table
-
-    -- Unidad de medida
-    LEFT JOIN Form fUnidad
-        ON p.catalogueId = CASE
-            WHEN CHARINDEX('/', fUnidad.name) > 0
-                THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
-            ELSE fUnidad.name
-        END
-    LEFT JOIN UserValue_UserData uudUnidad
-        ON fUnidad.id_Table + 9 = uudUnidad.id_Father
-       AND p.idXml = uudUnidad.idXml
 ),
-
 CTE_Niveles AS (
-    -- Nivel 0 → nodos raíz
     SELECT
         h.*,
         0 AS Nivel
@@ -350,118 +418,75 @@ CTE_Niveles AS (
 
     UNION ALL
 
-    -- Niveles siguientes (hijos)
     SELECT
         h.*,
         n.Nivel + 1
     FROM CTE_Hierarchy h
     INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
 )
-
 SELECT *
 FROM (
-    -- 🟢 PRIMERA PARTE: jerarquía de procesos / PR
     SELECT
         COALESCE(Parent.name, '')        AS Nombre_Padre,
         COALESCE(Parent.catalogueId, '') AS Process_codigo,
-
         CASE
             WHEN LEFT(Child.catalogueId, 2) = 'PR'
                 THEN Child.name + ' - Proceso: ' + COALESCE(Parent.catalogueId, '')
             ELSE Child.name
         END AS Nombre_Hijo,
-
         Child.catalogueId  AS Codigo_Hijo,
         Child.subType      AS Subtype_Hijo,
         Child.revision     AS Revision,
         1                  AS CantidadHijo_Total,
         nChild.Nivel       AS Nivel,
-
-        -- Tipo calculado (SIN WorkArea)
         CASE
-            -- PR de terceros: PRxxxxxT
             WHEN LEFT(Child.catalogueId, 2) = 'PR'
              AND RIGHT(Child.catalogueId, 1) = 'T'
                 THEN 'SV'
-
-            -- Comprado o materia prima
             WHEN Child.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
                 THEN 'MP'
-
-            -- Producto intermedio (PR)
             WHEN LEFT(Child.catalogueId, 2) = 'PR'
                 THEN 'PI'
-
-            -- Default
             ELSE 'PA'
         END AS Tipo,
-
-        Child.Deposito,
         Child.unMedida,
         Child.WorkArea_CatalogueId,
         Child.WorkArea_Nombre,
         Child.WorkArea_Revision
-
     FROM CTE_Niveles nChild
-    LEFT JOIN CTE_Niveles  nParent ON nChild.parentRef = nParent.id_Table
+    LEFT JOIN CTE_Niveles   nParent ON nChild.parentRef = nParent.id_Table
     LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
     LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
 
     UNION ALL
 
-    -- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad (SIN WorkArea)
     SELECT
         Operation.name   AS Nombre_Padre,
         p2.catalogueId   AS Process_codigo,
-
         CASE
             WHEN LEFT(x.CodigoNorm, 2) = 'PR'
                 THEN p.name + '- Proceso: ' + COALESCE(p2.catalogueId, '')
             ELSE p.name
         END AS Nombre_Hijo,
-
         x.CodigoNorm AS Codigo_Hijo,
-
         pr.subType   AS Subtype_Hijo,
         pr.revision  AS Revision,
         COUNT(p.productId) AS CantidadHijo_Total,
         3 AS Nivel,
-
         CASE
-            -- PR de terceros: PRxxxxxT
             WHEN LEFT(x.CodigoNorm, 2) = 'PR'
              AND RIGHT(x.CodigoNorm, 1) = 'T'
                 THEN 'SV'
-
-            -- Comprado
             WHEN pr.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
                 THEN 'MP'
-
-            -- Producto intermedio (PR)
             WHEN LEFT(x.CodigoNorm, 2) = 'PR'
                 THEN 'PI'
-
-            -- Default
             ELSE 'PA'
         END AS Tipo,
-
-        '01' AS Deposito,
-
-        MAX(
-            CASE
-                WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
-                WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
-                WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
-                WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
-                ELSE 'UN'
-            END
-        ) AS unMedida,
-
-        -- WorkArea (SIN USO): dejar NULL
+        COALESCE(NULLIF(MAX(um.UnidadMedida), ''), 'UN') AS unMedida,
         CAST(NULL AS varchar(50))  AS WorkArea_CatalogueId,
         CAST(NULL AS varchar(255)) AS WorkArea_Nombre,
         CAST(NULL AS varchar(20))  AS WorkArea_Revision
-
     FROM Occurrence
     INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
     INNER JOIN Product p          ON p.id_Table  = pr.masterRef
@@ -474,18 +499,18 @@ FROM (
     LEFT JOIN ProcessRevision pr2   ON o2.instancedRef = pr2.id_Table
     LEFT JOIN Process p2            ON pr2.masterRef = p2.id_Table
 
-    -- Unidad de medida
-    LEFT JOIN Form fUnidad2
-        ON p2.catalogueId = CASE
-            WHEN CHARINDEX('/', fUnidad2.name) > 0
-                THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
-            ELSE fUnidad2.name
-        END
-    LEFT JOIN UserValue_UserData uudUnidad2
-        ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
-       AND p2.idXml = uudUnidad2.idXml
+    OUTER APPLY (
+        SELECT TOP 1
+            TRY_CONVERT(BIGINT, REPLACE(REPLACE(si.unitRef,'#',''),'id','')) AS UnitId
+        FROM SetupInstance si
+        WHERE si.id_Table = TRY_CONVERT(BIGINT, REPLACE(REPLACE(Occurrence.instanceRefs,'#',''),'id',''))
+          AND si.unitRef IS NOT NULL
+          AND LTRIM(RTRIM(si.unitRef)) <> ''
+    ) unitPick
 
-    -- Código hijo normalizado
+    LEFT JOIN UNIT_MAP um
+        ON um.UnitId = unitPick.UnitId
+
     CROSS APPLY (
         SELECT
             CASE
@@ -593,25 +618,136 @@ ORDER BY
             }
         }
 
+        public static void EnsureTablasOpcionalesSB1(SqlConnection conn)
+        {
+            const string sql = @"
+IF OBJECT_ID('dbo.UserValue_Occurrence','U') IS NULL
+    CREATE TABLE dbo.UserValue_Occurrence (
+        id_Table BIGINT NULL,
+        id_Father BIGINT NULL,
+        idXml INT NULL,
+        title NVARCHAR(255) NULL,
+        value NVARCHAR(MAX) NULL
+    );
+
+IF OBJECT_ID('dbo.UserData','U') IS NULL
+    CREATE TABLE dbo.UserData (
+        id_Table BIGINT NULL,
+        id_Father BIGINT NULL,
+        idXml INT NULL
+    );
+
+IF OBJECT_ID('dbo.UserValue_UserData','U') IS NULL
+    CREATE TABLE dbo.UserValue_UserData (
+        id_Table BIGINT NULL,
+        id_Father BIGINT NULL,
+        idXml INT NULL,
+        title NVARCHAR(255) NULL,
+        value NVARCHAR(MAX) NULL
+    );
+
+IF OBJECT_ID('dbo.Unit','U') IS NULL
+    CREATE TABLE dbo.Unit (
+        id_Table BIGINT NULL,
+        idXml INT NULL
+    );
+
+IF OBJECT_ID('dbo.UserValue_Unit','U') IS NULL
+    CREATE TABLE dbo.UserValue_Unit (
+        id_Table BIGINT NULL,
+        id_Father BIGINT NULL,
+        idXml INT NULL,
+        title NVARCHAR(255) NULL,
+        value NVARCHAR(MAX) NULL
+    );
+
+IF OBJECT_ID('dbo.Form','U') IS NULL
+    CREATE TABLE dbo.Form (
+        id_Table BIGINT NULL,
+        idXml INT NULL,
+        name NVARCHAR(255) NULL
+    );
+
+IF OBJECT_ID('dbo.ProductRevisionView','U') IS NULL
+    CREATE TABLE dbo.ProductRevisionView (
+        id_Table BIGINT NULL,
+        idXml INT NULL,
+        revisionRef BIGINT NULL
+    );
+
+IF OBJECT_ID('dbo.ProductInstance','U') IS NULL
+    CREATE TABLE dbo.ProductInstance (
+        id_Table BIGINT NULL,
+        idXml INT NULL,
+        partRef BIGINT NULL,
+        unitRef NVARCHAR(255) NULL
+    );
+
+IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
+    CREATE TABLE dbo.WorkAreaOccurrence (
+        id_Table BIGINT NULL,
+        idXml INT NULL,
+        parentRef NVARCHAR(255) NULL,
+        instancedRef BIGINT NULL
+    );
+";
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.ExecuteNonQuery();
+        }
+
         public static async Task postSB1(string jsonData)
         {
-            JObject obj = JObject.Parse(jsonData);
+            void Log(string msg)
+            {
+                Console.WriteLine(msg);
+                Utilidades.EscribirEnLog(msg);
+            }
+
+            void LogJson(string header, string json)
+            {
+                Utilidades.EscribirJSONEnLog($"{header}\n{json}");
+            }
+
+            bool LooksLikeJson(string s)
+            {
+                if (string.IsNullOrWhiteSpace(s)) return false;
+                var t = s.TrimStart();
+                return t.StartsWith("{") || t.StartsWith("[");
+            }
+
+            JObject obj;
+            try
+            {
+                obj = JObject.Parse(jsonData);
+            }
+            catch (JsonException ex)
+            {
+                Log($"[SB1][POST] Error al parsear JSON: {ex.Message}");
+                LogJson("[SB1][POST] JSON recibido (inválido):", jsonData);
+                return;
+            }
+
             var productos = obj["producto"];
 
             string codigo = null;
             string descripcion = null;
             string revision = null;
 
-            foreach (var item in productos)
+            if (productos != null)
             {
-                var campo = item["campo"]?.ToString();
-                var valor = item["valor"]?.ToString();
+                foreach (var item in productos)
+                {
+                    var campo = item["campo"]?.ToString();
+                    var valor = item["valor"]?.ToString();
 
-                if (campo == "codigo") codigo = valor;
-                if (campo == "descripcion") descripcion = valor;
+                    if (campo == "codigo") codigo = valor;
+                    if (campo == "descripcion") descripcion = valor;
+                    if (campo == "revision") revision = valor; // opcional, si existe en el JSON
+                }
             }
 
-            Console.WriteLine($"[SB1][POST] Enviando producto -> codigo: {codigo}, descripcion: {descripcion}");
+            Log($"[SB1][POST] Enviando producto -> codigo: {codigo}, descripcion: {descripcion}");
+            LogJson($"[SB1][POST] JSON COMPLETO para producto {(string.IsNullOrEmpty(codigo) ? "(sin codigo)" : codigo)}:", jsonData);
 
             int intento = 0;
 
@@ -622,19 +758,24 @@ ORDER BY
                 try
                 {
                     await ProtheusHealth.WaitUntilActiveAsync("SB1-POST", RetryDelay);
+
                     using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
                     using HttpResponseMessage response = await _client.PostAsync(BaseUrlPost, content);
 
                     int statusCode = (int)response.StatusCode;
-                    string responseData = await response.Content.ReadAsStringAsync(); // <-- SIEMPRE leer
+                    string responseData = await response.Content.ReadAsStringAsync(); // SIEMPRE leer
 
-                    // NUEVO: si viene errorCode, loguear
+                    // Si la respuesta es JSON, mandarla al log JSON (además de log normal)
+                    if (LooksLikeJson(responseData))
+                        LogJson($"[SB1][POST] RESPUESTA JSON para {codigo} (HTTP {statusCode}):", responseData);
+
+                    // Si viene errorCode, loguear
                     LogErrorProtheusIfAny("SB1", "POST", codigo, responseData);
 
-                    // 409 => hacer PUT (pero el PUT también debe reintentar)
+                    // 409 => hacer PUT (el PUT también reintenta)
                     if (response.StatusCode == HttpStatusCode.Conflict)
                     {
-                        Console.WriteLine($"[SB1][POST] 409 Conflict. Intentando PUT /Modificar... (intento POST #{intento})");
+                        Log($"[SB1][POST] 409 Conflict. Intentando PUT /Modificar... (intento POST #{intento})");
                         await putSB1(jsonData);
                         return;
                     }
@@ -642,15 +783,15 @@ ORDER BY
                     // Reintento infinito ante 5xx
                     if (IsRetryableStatus(response.StatusCode))
                     {
-                        Console.WriteLine($"[SB1][POST] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
-                        Console.WriteLine($"[SB1][POST] Respuesta: {responseData}");
+                        Log($"[SB1][POST] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
+                        Log($"[SB1][POST] Respuesta: {responseData}");
                         await Task.Delay(RetryDelay);
                         continue;
                     }
 
                     // No reintentar: registramos resultado final
-                    Console.WriteLine($"[SB1][POST] Código de estado: {statusCode}");
-                    Console.WriteLine($"[SB1][POST] Respuesta: {responseData}");
+                    Log($"[SB1][POST] Código de estado: {statusCode}");
+                    Log($"[SB1][POST] Respuesta: {responseData}");
 
                     poblarBase(codigo, descripcion, "PA", "01", "UN", revision, statusCode, responseData);
                     await ProtheusHealth.PostCheckBestEffortAsync("SB1-POST");
@@ -658,37 +799,71 @@ ORDER BY
                 }
                 catch (Exception ex) when (IsRetryableException(ex))
                 {
-                    Console.WriteLine($"[SB1][POST] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    Log($"[SB1][POST] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
                     await Task.Delay(RetryDelay);
                     continue;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SB1][POST] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
+                    Log($"[SB1][POST] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
                     return;
                 }
             }
         }
 
-
         public static async Task putSB1(string jsonData)
         {
-            JObject obj = JObject.Parse(jsonData);
+            void Log(string msg)
+            {
+                Console.WriteLine(msg);
+                Utilidades.EscribirEnLog(msg);
+            }
+
+            void LogJson(string header, string json)
+            {
+                Utilidades.EscribirJSONEnLog($"{header}\n{json}");
+            }
+
+            bool LooksLikeJson(string s)
+            {
+                if (string.IsNullOrWhiteSpace(s)) return false;
+                var t = s.TrimStart();
+                return t.StartsWith("{") || t.StartsWith("[");
+            }
+
+            JObject obj;
+            try
+            {
+                obj = JObject.Parse(jsonData);
+            }
+            catch (JsonException ex)
+            {
+                Log($"[SB1][PUT] Error al parsear JSON: {ex.Message}");
+                LogJson("[SB1][PUT] JSON recibido (inválido):", jsonData);
+                return;
+            }
+
             var productos = obj["producto"];
 
             string codigo = null;
             string descripcion = null;
+            string revision = null;
 
-            foreach (var item in productos)
+            if (productos != null)
             {
-                var campo = item["campo"]?.ToString();
-                var valor = item["valor"]?.ToString();
+                foreach (var item in productos)
+                {
+                    var campo = item["campo"]?.ToString();
+                    var valor = item["valor"]?.ToString();
 
-                if (campo == "codigo") codigo = valor;
-                if (campo == "descripcion") descripcion = valor;
+                    if (campo == "codigo") codigo = valor;
+                    if (campo == "descripcion") descripcion = valor;
+                    if (campo == "revision") revision = valor; // opcional, si existe en el JSON
+                }
             }
 
-            Console.WriteLine($"[SB1][PUT] Modificando producto -> codigo: {codigo}, descripcion: {descripcion}");
+            Log($"[SB1][PUT] Modificando producto -> codigo: {codigo}, descripcion: {descripcion}");
+            LogJson($"[SB1][PUT] JSON COMPLETO para producto {(string.IsNullOrEmpty(codigo) ? "(sin codigo)" : codigo)}:", jsonData);
 
             int intento = 0;
 
@@ -699,51 +874,51 @@ ORDER BY
                 try
                 {
                     await ProtheusHealth.WaitUntilActiveAsync("SB1-PUT", RetryDelay);
+
                     using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
                     using HttpResponseMessage response = await _client.PutAsync(BaseUrlPut, content);
 
                     int statusCode = (int)response.StatusCode;
                     string responseData = await response.Content.ReadAsStringAsync();
 
-                    // NUEVO: si viene errorCode, loguear
+                    // Si la respuesta es JSON, mandarla al log JSON (además de log normal)
+                    if (LooksLikeJson(responseData))
+                        LogJson($"[SB1][PUT] RESPUESTA JSON para {codigo} (HTTP {statusCode}):", responseData);
+
+                    // Si viene errorCode, loguear
                     LogErrorProtheusIfAny("SB1", "PUT", codigo, responseData);
 
                     // Reintento infinito ante 5xx
                     if (IsRetryableStatus(response.StatusCode))
                     {
-                        Console.WriteLine($"[SB1][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
-                        Console.WriteLine($"[SB1][PUT] Respuesta: {responseData}");
-                        Utilidades.EscribirEnLog($"[SB1][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
-                        Utilidades.EscribirEnLog($"[SB1][PUT] Respuesta: {responseData}");
-
+                        Log($"[SB1][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
+                        Log($"[SB1][PUT] Respuesta: {responseData}");
                         await Task.Delay(RetryDelay);
                         continue;
                     }
 
                     // No reintentar: registramos resultado final
-                    Console.WriteLine($"[SB1][PUT] Código de estado: {statusCode}");
-                    Console.WriteLine($"[SB1][PUT] Respuesta: {responseData}");
-                    Utilidades.EscribirEnLog($"[SB1][PUT] Código de estado: {statusCode}");
-                    Utilidades.EscribirEnLog($"[SB1][PUT] Respuesta: {responseData}");
+                    Log($"[SB1][PUT] Código de estado: {statusCode}");
+                    Log($"[SB1][PUT] Respuesta: {responseData}");
+
                     await ProtheusHealth.PostCheckBestEffortAsync("SB1-PUT");
                     ActualizarBase(statusCode, responseData, codigo, descripcion);
                     return;
                 }
                 catch (Exception ex) when (IsRetryableException(ex))
                 {
-                    Console.WriteLine($"[SB1][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
-                    Utilidades.EscribirEnLog($"[SB1][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+                    Log($"[SB1][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
                     await Task.Delay(RetryDelay);
                     continue;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SB1][PUT] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
-                    Utilidades.EscribirEnLog($"[SB1][PUT] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
+                    Log($"[SB1][PUT] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
                     return;
                 }
             }
         }
+
 
 
         private static string ObtenerConsultaSB1_BOP(SqlConnection connection, out bool usaWorkArea)
@@ -806,8 +981,8 @@ ORDER BY
 
         public static List<string> jsonSB1_BOP()
         {
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
 
             // ✅ Elegir query según compatibilidad del XML/BD (misma lógica que SG1)
             string queryElegida;
@@ -822,7 +997,7 @@ ORDER BY
 
             // Diccionario para deduplicar por código
             var productosDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // codigo -> jsonData
-            var metaProductos = new Dictionary<string, (string desc, string tipo, string depo, string um, string rev)>(StringComparer.OrdinalIgnoreCase);
+            var metaProductos = new Dictionary<string, (string desc, string tipo,  string um, string rev)>(StringComparer.OrdinalIgnoreCase);
 
             int totalFilasSql = 0;
 
@@ -834,7 +1009,7 @@ ORDER BY
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.CommandTimeout = 120;
+                        command.CommandTimeout = 300;
 
                         using (SqlDataReader reader = command.ExecuteReader())
                         {
@@ -845,18 +1020,18 @@ ORDER BY
                                 string codigo = reader["Codigo_Hijo"]?.ToString() ?? "";
                                 string descripcion = reader["Nombre_Hijo"]?.ToString() ?? "";
                                 string tipo = reader["Tipo"]?.ToString() ?? "";
-                                string deposito = reader["Deposito"]?.ToString() ?? "";
+                                //string deposito = reader["Deposito"]?.ToString() ?? "";
                                 string unMedida = reader["unMedida"]?.ToString() ?? "";
                                 string revision = reader["Revision"]?.ToString() ?? "";
 
                                 Console.WriteLine(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | dep={deposito} | UM={unMedida} | rev={revision}"
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision}"
                                 );
                                 Utilidades.EscribirEnLog(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | dep={deposito} | UM={unMedida} | rev={revision}"
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision}"
                                 );
 
-                                metaProductos[codigo] = (descripcion, tipo, deposito, unMedida, revision);
+                                metaProductos[codigo] = (descripcion, tipo, unMedida, revision);
 
                                 var producto = new
                                 {
@@ -865,7 +1040,7 @@ ORDER BY
                                 new() { { "campo", "codigo"      }, { "valor", codigo      } },
                                 new() { { "campo", "descripcion" }, { "valor", descripcion } },
                                 new() { { "campo", "tipo"        }, { "valor", tipo        } },
-                                new() { { "campo", "deposito"    }, { "valor", deposito    } },
+                                //new() { { "campo", "deposito"    }, { "valor", deposito    } },
                                 new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
                                 new() { { "campo", "revEstruct"  }, { "valor", revision    } },
                             }
@@ -951,7 +1126,7 @@ ORDER BY
                 new() { { "campo", "codigo"      }, { "valor", codigoT   } },
                 new() { { "campo", "descripcion" }, { "valor", meta.desc } },
                 new() { { "campo", "tipo"        }, { "valor", "SV"      } },
-                new() { { "campo", "deposito"    }, { "valor", meta.depo } },
+                //new() { { "campo", "deposito"    }, { "valor", meta.depo } },
                 new() { { "campo", "unMedida"    }, { "valor", meta.um   } },
                 new() { { "campo", "revEstruct"  }, { "valor", meta.rev  } },
             }
@@ -985,65 +1160,114 @@ ORDER BY
 
         public static List<string> jsonSB1_MBOM()
         {
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"
-WITH CTE_Hierarchy AS (
+WITH UNIT_VALUES AS (
+    SELECT
+        TRY_CONVERT(BIGINT, u.id_Table) AS UnitId,
+        uv.title,
+        uv.value
+    FROM Unit u
+    LEFT JOIN UserValue_Unit uv
+        ON uv.id_Father = u.id_Table
+       AND uv.idXml     = u.idXml
+
+    UNION ALL
+
+    SELECT
+        TRY_CONVERT(BIGINT, u.id_Table) AS UnitId,
+        uv2.title,
+        uv2.value
+    FROM Unit u
+    INNER JOIN UserData ud
+        ON ud.id_Father = u.id_Table
+       AND ud.idXml     = u.idXml
+    INNER JOIN UserValue_UserData uv2
+        ON uv2.id_Father = ud.id_Table
+       AND uv2.idXml     = u.idXml
+),
+UNIT_MAP AS (
+    SELECT
+        UnitId,
+        COALESCE(
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Kilogramos' THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Litros'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Metros'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'Agm4_Unidad'     THEN value END), ''),
+            NULLIF(MAX(CASE WHEN title = 'uom_tag'         THEN value END), '')
+        ) AS UnidadMedida
+    FROM UNIT_VALUES
+    GROUP BY UnitId
+),
+QTY_VALUES AS (
+    SELECT
+        o.id_Table AS OccurrenceId,
+        o.idXml,
+        COALESCE(
+            MAX(CASE WHEN uvo.title = 'Quantity' THEN TRY_CAST(uvo.value AS DECIMAL(18,6)) END),
+            MAX(CASE WHEN uvud.title = 'Quantity' THEN TRY_CAST(uvud.value AS DECIMAL(18,6)) END)
+        ) AS QtyValue
+    FROM Occurrence o
+    LEFT JOIN UserValue_Occurrence uvo
+        ON uvo.id_Father = o.id_Table
+       AND uvo.idXml     = o.idXml
+    LEFT JOIN UserData ud
+        ON ud.id_Father = o.id_Table
+       AND ud.idXml     = o.idXml
+    LEFT JOIN UserValue_UserData uvud
+        ON uvud.id_Father = ud.id_Table
+       AND uvud.idXml     = o.idXml
+    GROUP BY o.id_Table, o.idXml
+),
+CTE_Hierarchy AS (
     SELECT DISTINCT
-        Occurrence.id_table,
-        ProductRevision.name,
-        Product.productId AS codigo,
-        CAST(Occurrence.parentRef AS INT) AS parentRef,
-        ProductRevision.revision,
-        ProductRevision.subType,
-        Occurrence.idXml
-    FROM Occurrence
-    LEFT JOIN ProductRevision 
-           ON Occurrence.instancedRef = ProductRevision.id_Table
-          AND Occurrence.idXml       = ProductRevision.idXml
-    LEFT JOIN Product 
-           ON ProductRevision.masterRef = Product.id_Table
-          AND ProductRevision.idXml    = Product.idXml
-    GROUP BY
-        Occurrence.id_table, ProductRevision.name, Product.productId,
-        Occurrence.parentRef, ProductRevision.revision,
-        ProductRevision.subType, Occurrence.idXml
+        o.id_Table AS id_table,
+        pr.id_Table AS ProductRevisionId,
+        pr.name,
+        p.productId AS codigo,
+        TRY_CONVERT(BIGINT, o.parentRef) AS parentRef,
+        pr.revision,
+        pr.subType,
+        o.idXml
+    FROM Occurrence o
+    LEFT JOIN ProductRevision pr
+        ON o.instancedRef = pr.id_Table
+       AND o.idXml        = pr.idXml
+    LEFT JOIN Product p
+        ON pr.masterRef = p.id_Table
+       AND pr.idXml     = p.idXml
 ),
 Base AS (
     SELECT DISTINCT
-        COALESCE(Parent.name, '')              AS Nombre_Padre,
+        COALESCE(Parent.name, '') AS Nombre_Padre,
         COALESCE(CodFmt.CodigoPadre_Final, '') AS Process_codigo,
-        Child.name                             AS Nombre_Hijo,
-        CodFmt.CodigoHijo_Final                AS Codigo_Hijo,
-        Child.subType                          AS Subtype_Hijo,
-        Qty.CantidadFinal                      AS CantidadHijo_Total,
-        Child.revision                         AS Revision,
-
-        MIN('PA')                              AS Tipo,
-        MIN('01')                              AS Deposito,
-        MAX(
-            CASE 
-                WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
-                WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
-                WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
-                WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
-                ELSE 'UN'
-            END
-        ) AS unMedida
-
+        Child.name AS Nombre_Hijo,
+        CodFmt.CodigoHijo_Final AS Codigo_Hijo,
+        Child.subType AS Subtype_Hijo,
+        Qty.CantidadFinal AS CantidadHijo_Total,
+        Child.revision AS Revision,
+        MIN('PA') AS Tipo,
+        MIN('YY') AS Deposito,
+        COALESCE(NULLIF(MAX(um.UnidadMedida), ''), 'UN') AS unMedida
     FROM CTE_Hierarchy Child
-    LEFT JOIN CTE_Hierarchy Parent 
-           ON Child.parentRef = Parent.id_table
+    LEFT JOIN CTE_Hierarchy Parent
+        ON Child.parentRef = TRY_CONVERT(BIGINT, Parent.id_table)
 
-    LEFT JOIN Form fUnidad
-           ON Child.codigo = CASE
-                                WHEN CHARINDEX('/', fUnidad.name) > 0 
-                                    THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
-                                ELSE fUnidad.name
-                             END
-    LEFT JOIN UserValue_UserData uudUnidad
-           ON fUnidad.id_Table + 9 = uudUnidad.id_Father
-          AND Child.idXml          = uudUnidad.idXml
+    LEFT JOIN ProductRevisionView prv
+        ON prv.revisionRef = Child.ProductRevisionId
+       AND prv.idXml       = Child.idXml
+
+    LEFT JOIN ProductInstance pi
+        ON pi.partRef = prv.id_Table
+       AND pi.idXml   = Child.idXml
+
+    OUTER APPLY (
+        SELECT TRY_CONVERT(BIGINT, pi.unitRef) AS UnitId
+    ) unitPick
+
+    LEFT JOIN UNIT_MAP um
+        ON um.UnitId = unitPick.UnitId
 
     LEFT JOIN (
         SELECT
@@ -1051,27 +1275,30 @@ Base AS (
             pHijo.productId AS ChildCodigo,
             CASE 
                 WHEN prHijo.subType = 'Agm4_MatPrimaRevision'
-                    THEN SUM(TRY_CAST(uvud.value AS DECIMAL(18,6)))
+                    THEN SUM(COALESCE(qv.QtyValue, 1))
                 ELSE COUNT(DISTINCT oHijo.id_Table)
             END AS Cantidad
         FROM Product pHijo
-        INNER JOIN ProductRevision prHijo 
-                ON pHijo.id_Table = prHijo.masterRef
-        LEFT JOIN Occurrence oHijo       
-               ON oHijo.instancedRef = prHijo.id_Table
-        LEFT JOIN UserValue_UserData uvud 
-               ON uvud.id_Father = oHijo.id_Table + 2 
-              AND uvud.title    = 'Quantity'
-        LEFT JOIN Occurrence oPadre 
-               ON oHijo.parentRef = oPadre.id_Table
+        INNER JOIN ProductRevision prHijo
+            ON pHijo.id_Table = prHijo.masterRef
+           AND pHijo.idXml    = prHijo.idXml
+        LEFT JOIN Occurrence oHijo
+            ON oHijo.instancedRef = prHijo.id_Table
+           AND oHijo.idXml        = prHijo.idXml
+        LEFT JOIN QTY_VALUES qv
+            ON qv.OccurrenceId = oHijo.id_Table
+           AND qv.idXml        = oHijo.idXml
+        LEFT JOIN Occurrence oPadre
+            ON oHijo.parentRef = oPadre.id_Table
+           AND oHijo.idXml     = oPadre.idXml
         GROUP BY oPadre.id_Table, pHijo.productId, prHijo.subType
     ) sq3
-        ON sq3.ParentOccurrenceId = Parent.id_table
+        ON sq3.ParentOccurrenceId = TRY_CONVERT(BIGINT, Parent.id_table)
        AND sq3.ChildCodigo        = Child.codigo
 
     OUTER APPLY (
         SELECT CAST(
-            CASE 
+            CASE
                 WHEN Parent.id_table IS NULL THEN 1
                 ELSE ISNULL(sq3.Cantidad, 1)
             END
@@ -1091,7 +1318,6 @@ Base AS (
                         ELSE Parent.codigo
                     END
             END AS CodigoPadre_SB1,
-
             CASE 
                 WHEN Child.codigo IS NULL THEN NULL
                 ELSE
@@ -1116,7 +1342,6 @@ Base AS (
                         ELSE CodSB1.CodigoPadre_SB1
                     END
             END AS CodigoPadre_SinE,
-
             CASE 
                 WHEN Parent.codigo IS NULL THEN CodSB1.CodigoHijo_SB1
                 ELSE
@@ -1139,7 +1364,6 @@ Base AS (
                         ELSE CodSinE.CodigoPadre_SinE
                     END
             END AS CodigoPadre_Final,
-
             CASE 
                 WHEN Parent.codigo IS NULL THEN CodSinE.CodigoHijo_SinE
                 ELSE
@@ -1178,13 +1402,12 @@ SELECT
         WHEN b.Subtype_Hijo = 'Agm4_sub_mBOM_ERevision'
              AND LEN(ISNULL(b.Codigo_Hijo,'')) = 6
             THEN 'S'
-		WHEN b.Subtype_Hijo = 'Agm4_ConGeneralRevision'
+        WHEN b.Subtype_Hijo = 'Agm4_ConGeneralRevision'
              AND b.Nombre_Hijo NOT LIKE '%INT.%'
             THEN 'S'
         ELSE 'N'
     END AS Es_Fantasma
 FROM Base b
---WHERE Process_codigo = '066650'
 ORDER BY b.Process_codigo;
 ";
 
@@ -1200,7 +1423,7 @@ ORDER BY b.Process_codigo;
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.CommandTimeout = 120;
+                        command.CommandTimeout = 300;
 
                         using (SqlDataReader reader = command.ExecuteReader())
                         {
@@ -1211,7 +1434,7 @@ ORDER BY b.Process_codigo;
                                 string codigo = reader["Codigo_Hijo"]?.ToString() ?? "";
                                 string descripcion = reader["Nombre_Hijo"]?.ToString() ?? "";
                                 string tipo = reader["Tipo"]?.ToString() ?? "";
-                                string deposito = reader["Deposito"]?.ToString() ?? "";
+                                //string deposito = reader["Deposito"]?.ToString() ?? "";
                                 string unMedida = reader["unMedida"]?.ToString() ?? "";
                                 string revision = reader["Revision"]?.ToString() ?? "";
 
@@ -1219,10 +1442,10 @@ ORDER BY b.Process_codigo;
                                 string fantasma = reader["Es_Fantasma"]?.ToString() ?? "N";
 
                                 Console.WriteLine(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | dep={deposito} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
                                 );
                                 Utilidades.EscribirEnLog(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | dep={deposito} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
                                 );
 
                                 var producto = new
@@ -1232,7 +1455,7 @@ ORDER BY b.Process_codigo;
                                 new() { { "campo", "codigo"      }, { "valor", codigo      } },
                                 new() { { "campo", "descripcion" }, { "valor", descripcion } },
                                 new() { { "campo", "tipo"        }, { "valor", tipo        } },
-                                new() { { "campo", "deposito"    }, { "valor", deposito    } },
+                                //new() { { "campo", "deposito"    }, { "valor", deposito    } },
                                 new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
                                 new() { { "campo", "revEstruct"  }, { "valor", revision    } },
 
@@ -1287,8 +1510,8 @@ ORDER BY b.Process_codigo;
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                          Integrated Security=True;TrustServerCertificate=True";
 
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = "  INSERT INTO SB1 (codigo, descripcion, tipo, deposito, unMedida, revision, estado, mensaje)\r\nSELECT @codigo, @descripcion, @tipo, @deposito, @unMedida, @revision, @estado, @mensaje\r\nWHERE NOT EXISTS (SELECT 1 FROM SB1 WHERE codigo = @codigo)";
             try
             {
@@ -1321,8 +1544,8 @@ ORDER BY b.Process_codigo;
         {
 
             //string connectionString = "Server=10.0.0.109,1433;Database=AgrometalBOP;User Id=chaco;Password=Descar_2020;";
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
             string query = @"UPDATE SB1
                           SET estado = @estado, mensaje = @mensaje
                           WHERE codigo = @codigo AND descripcion = @descripcion 

@@ -680,34 +680,58 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
 
         //Consulta para los xml que vienen sin WorkAreaOccurrence
         private const string ConsultaA_ConWorkArea_SinWAO = @"
-SELECT p.catalogueId AS Padre, 
-p.name AS descripcion, 
-wa.catalogueId AS centroTrabajo, 
-prod.productId AS recurso, 
-op.catalogueId AS Operacion, 
-ta.allocated_time_centesimal AS allocated_time_centesimal, 
-ROW_NUMBER() OVER ( PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId ORDER BY prod.productId ) AS nro_recurso FROM ProcessRevision AS pr 
-INNER JOIN Process AS p ON p.id_Table = pr.masterRef 
-INNER JOIN ProcessOccurrence AS po ON po.instancedRef = pr.id_Table 
--- WorkArea hija del PR 
-INNER JOIN Occurrence AS occ1 ON occ1.parentRef = po.id_Table AND occ1.subType IN ('MEWorkArea','MEWorkarea') INNER JOIN WorkAreaRevision AS war ON war.id_Table = occ1.instancedRef 
-INNER JOIN WorkArea AS wa ON wa.id_Table = war.masterRef 
--- Recursos: hijos de la WorkArea sin usar WorkAreaOccurrence 
-INNER JOIN Occurrence occ2 ON occ2.parentRef = occ1.id_Table 
-INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef 
-INNER JOIN Product prod ON prod.id_Table = prod_rev.masterRef 
--- Operaciones 
-LEFT JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef 
-LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef -- Tiempo por operación 
-OUTER APPLY ( SELECT TOP 1 uvud_time.value AS allocated_time_centesimal FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s JOIN AssociatedAttachment aa ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3) 
-JOIN Form f_time ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3) AND f_time.subType = 'MEOpTimeAnalysis' 
-JOIN UserValue_UserData uvud_time ON uvud_time.id_Father = f_time.id_Table + 1 AND uvud_time.title = 'allocated_time' ) AS ta
+SELECT
+p.catalogueId AS Padre,
+p.name AS descripcion,
+wa.catalogueId AS centroTrabajo,
+prod.productId AS recurso,
+op.catalogueId AS Operacion,
+ta.allocated_time_centesimal AS allocated_time_centesimal,
+ROW_NUMBER() OVER (PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId ORDER BY prod.productId) AS nro_recurso
+FROM ProcessRevision AS pr
+INNER JOIN Process AS p ON p.id_Table = pr.masterRef
+INNER JOIN ProcessOccurrence AS po ON po.instancedRef = pr.id_Table
+INNER JOIN Occurrence AS occ1 ON occ1.parentRef = po.id_Table AND occ1.subType IN ('MEWorkArea','MEWorkarea')
+INNER JOIN WorkAreaRevision AS war ON war.id_Table = occ1.instancedRef
+INNER JOIN WorkArea AS wa ON wa.id_Table = war.masterRef
+INNER JOIN Occurrence occ2 ON occ2.parentRef = occ1.id_Table
+INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
+INNER JOIN Product prod ON prod.id_Table = prod_rev.masterRef
+LEFT JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table
+LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef
+LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef
+OUTER APPLY (
+    SELECT TOP 1
+        uvf.value AS allocated_time_centesimal
+    FROM STRING_SPLIT(COALESCE(po_op.associatedAttachmentRefs, ''), ' ') s
+    CROSS APPLY (
+        SELECT TRY_CONVERT(BIGINT, REPLACE(REPLACE(LTRIM(RTRIM(s.value)),'#',''),'id','')) AS AttId
+    ) s2
+    INNER JOIN AssociatedAttachment aa
+        ON aa.id_Table = s2.AttId
+    CROSS APPLY (
+        SELECT TRY_CONVERT(BIGINT, REPLACE(REPLACE(CONCAT(aa.attachmentRef,''),'#',''),'id','')) AS FormId
+    ) a2
+    INNER JOIN Form f_time
+        ON f_time.id_Table = a2.FormId
+       AND f_time.subType = 'MEOpTimeAnalysis'
+    INNER JOIN UserValue_Form uvf
+        ON uvf.title = 'allocated_time'
+       AND uvf.idXml = f_time.idXml
+       AND (
+            TRY_CONVERT(BIGINT, CONCAT(uvf.id_Father,'')) = f_time.id_Table
+            OR TRY_CONVERT(BIGINT, CONCAT(uvf.id_Father,'')) = f_time.id_Table + 1
+            OR TRY_CONVERT(BIGINT, CONCAT(uvf.id_Table,'')) = f_time.id_Table
+       )
+) AS ta
 GROUP BY p.catalogueId, p.name, wa.catalogueId, prod.productId, op.catalogueId, ta.allocated_time_centesimal
-ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC
+ORDER BY 
+TRY_CONVERT(INT, SUBSTRING(p.catalogueId, 4, LEN(p.catalogueId) - 3)) DESC
 ";
 
         //Consulta para los xml que vienen sin WorkArea
-        private const string consultaB_sin_workarea = @"SELECT
+        private const string consultaB_sin_workarea = @"
+SELECT
     p.catalogueId   AS Padre,
     p.name          AS descripcion,
     NULL            AS centroTrabajo,          -- no hay WA
@@ -751,10 +775,10 @@ LEFT JOIN UserValue_UserData AS uud
 
 -- Vista e instancia de proceso (para nro_busqueda)
 INNER JOIN ProcessRevisionView pr_view 
-        ON RIGHT(pr_view.revisionRef, LEN(pr_view.revisionRef) - 3) = pr.id_Table
+        ON pr_view.revisionRef = pr.id_Table
 
 INNER JOIN ProcessInstance pr_ins 
-        ON RIGHT(pr_ins.partRef, LEN(pr_ins.partRef) - 3) = pr_view.id_Table
+        ON pr_ins.partRef = pr_view.id_Table
 
 -- Operaciones
 INNER JOIN ProcessOccurrence po_op 
@@ -768,8 +792,9 @@ INNER JOIN Operation op
 
 -- Cálculo de tiempo
 
-
-ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+ORDER BY
+	TRY_CONVERT(INT, SUBSTRING(p.catalogueId, 4, LEN(p.catalogueId) - 3)) DESC
+";
 
         //Consulta para los xml que vienen con WorkArea que apunta directo a ProductRevision
         private const string ConsultaC_WorkAreaEspecial = @"
@@ -928,8 +953,8 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
         public static List<string> jsonSG2_SH3()
         {
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
 
             List<string> jsonProductos = new List<string>();
             Utilidades.EscribirEnLog("jsonSG2_SH3 -> entrando al método");
@@ -1103,8 +1128,8 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 
         public static List<string> jsonSB1_BOP()
         {
-            //string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
             const string schemaPatch = @"
                                         SET NOCOUNT ON;
                                         SET XACT_ABORT ON;
