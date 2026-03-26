@@ -919,9 +919,58 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
             }
         }
 
+		public static string BopProcesadaPath { get; set; } = string.Empty;
+		public static string CurrentBopCode { get; set; } = string.Empty;
+
+		private static string NormalizarNombreBop(string? name)
+		{
+			if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+			name = name.Trim();
+
+			// Si el archivo es "P-037801.xml" pero el código es "037801", matchea igual
+			if (name.StartsWith("P-", StringComparison.OrdinalIgnoreCase))
+				name = name.Substring(2).Trim();
+
+			return name;
+		}
+
+		private static HashSet<string> LeerNombresBopsDisponibles()
+		{
+			var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			void AddFromFolder(string folder)
+			{
+				if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+					return;
+
+				foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly))
+				{
+					var ext = Path.GetExtension(file);
+					if (!ext.Equals(".xml", StringComparison.OrdinalIgnoreCase) &&
+						!ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase))
+						continue;
+
+					var name = NormalizarNombreBop(Path.GetFileNameWithoutExtension(file));
+					if (!string.IsNullOrWhiteSpace(name))
+						set.Add(name);
+				}
+			}
+
+			// Importante para BOP: considerar Input + Procesada
+			AddFromFolder(BopInputPath);
+			AddFromFolder(BopProcesadaPath);
+
+			// Y también la BOP actual (por si ya se movió / renombró)
+			var cur = NormalizarNombreBop(CurrentBopCode);
+			if (!string.IsNullOrWhiteSpace(cur))
+				set.Add(cur);
+
+			Utilidades.EscribirEnLog($"[SB1][BOP] BOPs disponibles={set.Count} | Input={BopInputPath} | Procesada={BopProcesadaPath} | Actual={CurrentBopCode}");
+			return set;
+		}
 
 
-        private static string ObtenerConsultaSB1_BOP(SqlConnection connection, out bool usaWorkArea)
+		private static string ObtenerConsultaSB1_BOP(SqlConnection connection, out bool usaWorkArea)
         {
             usaWorkArea = false;
 
@@ -1000,8 +1049,9 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
             var metaProductos = new Dictionary<string, (string desc, string tipo,  string um, string rev)>(StringComparer.OrdinalIgnoreCase);
 
             int totalFilasSql = 0;
+			var bopDisponibles = LeerNombresBopsDisponibles();
 
-            void EjecutarSB1Query(string query)
+			void EjecutarSB1Query(string query)
             {
                 using (SqlConnection connection = new SqlConnection(connectionString))
                 {
@@ -1023,12 +1073,15 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
                                 //string deposito = reader["Deposito"]?.ToString() ?? "";
                                 string unMedida = reader["unMedida"]?.ToString() ?? "";
                                 string revision = reader["Revision"]?.ToString() ?? "";
+								string subtype = reader["Subtype_Hijo"]?.ToString() ?? "";
+								string fantasma = CalcularFantasmaDesdeBopPendiente(codigo, subtype, bopDisponibles);
 
-                                Console.WriteLine(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision}"
+
+								Console.WriteLine(
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
                                 );
                                 Utilidades.EscribirEnLog(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision}"
+                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma ={fantasma}"
                                 );
 
                                 metaProductos[codigo] = (descripcion, tipo, unMedida, revision);
@@ -1043,8 +1096,10 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
                                 //new() { { "campo", "deposito"    }, { "valor", deposito    } },
                                 new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
                                 new() { { "campo", "revEstruct"  }, { "valor", revision    } },
-                            }
-                                };
+								new() { { "campo", "fantasma" }, { "valor", fantasma } },
+
+							}
+								};
 
                                 string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
 
@@ -1129,8 +1184,9 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
                 //new() { { "campo", "deposito"    }, { "valor", meta.depo } },
                 new() { { "campo", "unMedida"    }, { "valor", meta.um   } },
                 new() { { "campo", "revEstruct"  }, { "valor", meta.rev  } },
-            }
-                };
+				new() { { "campo", "fantasma" }, { "valor", "N" } },
+			}
+				};
 
                 string jsonT = JsonConvert.SerializeObject(productoT, Formatting.Indented);
 
@@ -1157,13 +1213,81 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
             return jsonProductos;
         }
 
+		public static string BopInputPath { get; set; } = string.Empty;
 
-        public static List<string> jsonSB1_MBOM()
-        {
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            string query = @"
-WITH UNIT_VALUES AS (
+		private static readonly HashSet<string> SubtypesFantasmaSinBop =
+			new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+			{
+		"Agm4_ConGeneralRevision",
+        "Agm4_SubConRevision",
+        "Agm4_conj_mBOM_FRevision",
+        "Agm4_sub_mBOM_ERevision",
+        "Agm4_sub_mBOM_SRevision"
+            };
+
+		private static HashSet<string> LeerNombresBopsPendientesDesdeBopInput()
+		{
+			var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			var carpeta = (BopInputPath ?? "").Trim();
+
+			if (string.IsNullOrWhiteSpace(carpeta) || !Directory.Exists(carpeta))
+			{
+				Utilidades.EscribirEnLog($"[SB1][MBOM] BOP_Input inválido o inexistente: {carpeta}. Se asume 0 BOPs pendientes.");
+				return set;
+			}
+
+			var archivos = Directory.EnumerateFiles(carpeta, "*", SearchOption.TopDirectoryOnly)
+				.Where(f =>
+				{
+					var ext = Path.GetExtension(f);
+					return ext.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+						|| ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase);
+				});
+
+			foreach (var file in archivos)
+			{
+				var name = Path.GetFileNameWithoutExtension(file)?.Trim();
+				if (!string.IsNullOrWhiteSpace(name))
+					set.Add(name);
+			}
+
+			Utilidades.EscribirEnLog($"[SB1][MBOM] BOPs detectadas en BOP_Input ({carpeta}): {set.Count}");
+			return set;
+		}
+
+		private static string CalcularFantasmaDesdeBopPendiente(string codigoHijoFinal, string subtypeHijo, HashSet<string> bopDisponibles)
+		{
+			if (string.IsNullOrWhiteSpace(codigoHijoFinal))
+				return "N";
+
+			var codigo = NormalizarNombreBop(codigoHijoFinal);
+			var st = (subtypeHijo ?? "").Trim();
+
+			if (bopDisponibles != null && bopDisponibles.Contains(codigo))
+				return "N";
+
+			if (!string.IsNullOrWhiteSpace(st) && SubtypesFantasmaSinBop.Contains(st))
+				return "S";
+
+			return "N";
+		}
+
+
+
+		public static List<string> jsonSB1_MBOM()
+		{
+			return jsonSB1_MBOM(out _);
+		}
+
+		public static List<string> jsonSB1_MBOM(out HashSet<string> codigosFantasma)
+		{
+			codigosFantasma = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			//string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+			string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+			string query = @"
+    WITH UNIT_VALUES AS (
     SELECT
         TRY_CONVERT(BIGINT, u.id_Table) AS UnitId,
         uv.title,
@@ -1334,7 +1458,7 @@ Base AS (
     OUTER APPLY (
         SELECT
             CASE 
-                WHEN Parent.codigo IS NULL THEN NULL
+                WHEN CodSB1.CodigoPadre_SB1 IS NULL THEN NULL
                 ELSE
                     CASE 
                         WHEN LEFT(CodSB1.CodigoPadre_SB1, 1) = 'E'
@@ -1394,118 +1518,112 @@ Base AS (
         Child.subType
 )
 SELECT
-    b.*,
-    CASE
-        WHEN b.Subtype_Hijo = 'Agm4_SubConRevision'
-             AND b.Nombre_Hijo NOT LIKE '%INT.%'
-            THEN 'S'
-        WHEN b.Subtype_Hijo = 'Agm4_sub_mBOM_ERevision'
-             AND LEN(ISNULL(b.Codigo_Hijo,'')) = 6
-            THEN 'S'
-        WHEN b.Subtype_Hijo = 'Agm4_ConGeneralRevision'
-             AND b.Nombre_Hijo NOT LIKE '%INT.%'
-            THEN 'S'
-        ELSE 'N'
-    END AS Es_Fantasma
+    b.*
 FROM Base b
 ORDER BY b.Process_codigo;
-";
+    ";
 
-            // 🔑 Diccionario para deduplicar por código
-            var productosDict = new Dictionary<string, string>(); // codigo -> jsonData
-            int totalFilasSql = 0;
+			var bopPendientes = LeerNombresBopsPendientesDesdeBopInput();
 
-            try
-            {
-                using (SqlConnection connection = new SqlConnection(connectionString))
-                {
-                    connection.Open();
+			var productosDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+			var subtypePorCodigo = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-                    using (SqlCommand command = new SqlCommand(query, connection))
-                    {
-                        command.CommandTimeout = 300;
+			int totalFilasSql = 0;
+			int cantFantasmaS = 0;
+			int cantFantasmaN = 0;
 
-                        using (SqlDataReader reader = command.ExecuteReader())
-                        {
-                            while (reader.Read())
-                            {
-                                totalFilasSql++;
+			try
+			{
+				using (SqlConnection connection = new SqlConnection(connectionString))
+				{
+					connection.Open();
 
-                                string codigo = reader["Codigo_Hijo"]?.ToString() ?? "";
-                                string descripcion = reader["Nombre_Hijo"]?.ToString() ?? "";
-                                string tipo = reader["Tipo"]?.ToString() ?? "";
-                                //string deposito = reader["Deposito"]?.ToString() ?? "";
-                                string unMedida = reader["unMedida"]?.ToString() ?? "";
-                                string revision = reader["Revision"]?.ToString() ?? "";
+					using (SqlCommand command = new SqlCommand(query, connection))
+					{
+						command.CommandTimeout = 600;
 
-                                // ✅ NUEVO: fantasma SI/NO desde SQL
-                                string fantasma = reader["Es_Fantasma"]?.ToString() ?? "N";
+						using (SqlDataReader reader = command.ExecuteReader())
+						{
+							while (reader.Read())
+							{
+								totalFilasSql++;
 
-                                Console.WriteLine(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
-                                );
-                                Utilidades.EscribirEnLog(
-                                    $"[SB1 SQL] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | fantasma={fantasma}"
-                                );
+								string codigo = reader["Codigo_Hijo"]?.ToString()?.Trim() ?? "";
+								string descripcion = reader["Nombre_Hijo"]?.ToString() ?? "";
+								string tipo = reader["Tipo"]?.ToString() ?? "";
+								string unMedida = reader["unMedida"]?.ToString() ?? "";
+								string revision = reader["Revision"]?.ToString() ?? "";
+								string subtype = reader["Subtype_Hijo"]?.ToString() ?? "";
 
-                                var producto = new
-                                {
-                                    producto = new List<Dictionary<string, string>>
-                            {
-                                new() { { "campo", "codigo"      }, { "valor", codigo      } },
-                                new() { { "campo", "descripcion" }, { "valor", descripcion } },
-                                new() { { "campo", "tipo"        }, { "valor", tipo        } },
-                                //new() { { "campo", "deposito"    }, { "valor", deposito    } },
-                                new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
-                                new() { { "campo", "revEstruct"  }, { "valor", revision    } },
+								if (!string.IsNullOrWhiteSpace(codigo))
+								{
+									if (!subtypePorCodigo.ContainsKey(codigo))
+										subtypePorCodigo[codigo] = subtype;
+								}
 
-                                // ✅ NUEVO CAMPO EN JSON SB1
-                                new() { { "campo", "fantasma"    }, { "valor", fantasma    } },
-                            }
-                                };
+								var subtypeCanon = (!string.IsNullOrWhiteSpace(codigo) && subtypePorCodigo.TryGetValue(codigo, out var st)) ? st : subtype;
 
-                                string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
+								string fantasma = CalcularFantasmaDesdeBopPendiente(codigo, subtypeCanon, bopPendientes);
 
-                                if (productosDict.ContainsKey(codigo))
-                                    Console.WriteLine($"[SB1] Código {codigo} ya existía, se reemplaza el JSON anterior por el nuevo.");
-                                else
-                                    Console.WriteLine($"[SB1] Nuevo código agregado al diccionario: {codigo}");
+								if (fantasma.Equals("S", StringComparison.OrdinalIgnoreCase))
+								{
+									if (!string.IsNullOrWhiteSpace(codigo))
+										codigosFantasma.Add(codigo);
+									cantFantasmaS++;
+								}
+								else
+								{
+									cantFantasmaN++;
+								}
 
-                                productosDict[codigo] = jsonData;
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error al consultar la base de datos: {ex.Message}");
-                Utilidades.EscribirEnLog($"Error al consultar la base de datos: {ex.Message}");
-            }
+								Utilidades.EscribirEnLog(
+									$"[SB1 SQL][MBOM] codigo_hijo={codigo} | desc={descripcion} | tipo={tipo} | UM={unMedida} | rev={revision} | subtype={subtypeCanon} | fantasma={fantasma}"
+								);
 
-            var jsonProductos = new List<string>();
-            foreach (var kvp in productosDict)
-            {
-                Console.WriteLine("-- sb1 unico --");
-                Console.WriteLine($"[SB1 JSON FINAL] codigo={kvp.Key}");
-                Console.WriteLine(kvp.Value);
+								var producto = new
+								{
+									producto = new List<Dictionary<string, string>>
+							{
+								new() { { "campo", "codigo"      }, { "valor", codigo      } },
+								new() { { "campo", "descripcion" }, { "valor", descripcion } },
+								new() { { "campo", "tipo"        }, { "valor", tipo        } },
+								new() { { "campo", "unMedida"    }, { "valor", unMedida    } },
+								new() { { "campo", "revEstruct"  }, { "valor", revision    } },
+								new() { { "campo", "fantasma"    }, { "valor", fantasma    } },
+							}
+								};
 
-                Utilidades.EscribirEnLog("-- sb1 unico --");
-                Utilidades.EscribirEnLog($"[SB1 JSON FINAL] codigo={kvp.Key}");
-                Utilidades.EscribirEnLog(kvp.Value);
+								string jsonData = JsonConvert.SerializeObject(producto, Formatting.Indented);
+								productosDict[codigo] = jsonData;
+							}
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Error al consultar la base de datos: {ex.Message}");
+				Utilidades.EscribirEnLog($"Error al consultar la base de datos: {ex.Message}");
+			}
 
-                jsonProductos.Add(kvp.Value);
-            }
+			Utilidades.EscribirEnLog($"[SB1][MBOM] Resumen fantasma: S={cantFantasmaS} | N={cantFantasmaN} | SetFantasmas={codigosFantasma.Count} | BOP_Input={BopInputPath}");
 
-            Console.WriteLine($"SB1 -> filas SQL totales: {totalFilasSql}, códigos únicos: {productosDict.Count}");
-            Utilidades.EscribirEnLog($"SB1 -> filas SQL totales: {totalFilasSql}, códigos únicos: {productosDict.Count}");
+			var jsonProductos = new List<string>();
+			foreach (var kvp in productosDict)
+			{
+				jsonProductos.Add(kvp.Value);
+			}
 
-            return jsonProductos;
-        }
+			Utilidades.EscribirEnLog($"SB1[MBOM] -> filas SQL totales: {totalFilasSql}, códigos únicos: {productosDict.Count}");
+			return jsonProductos;
+		}
 
 
 
-        public static void poblarBase(string codigo, string descripcion, string tipo, string deposito, string unMedida, string revision, int estado, string mensaje)
+
+
+
+		public static void poblarBase(string codigo, string descripcion, string tipo, string deposito, string unMedida, string revision, int estado, string mensaje)
         {
             //string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
             //                          Integrated Security=True;TrustServerCertificate=True";

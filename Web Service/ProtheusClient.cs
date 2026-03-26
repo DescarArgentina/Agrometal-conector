@@ -94,10 +94,12 @@ namespace Web_Service
                 {
                     // Timeout health
                     Console.WriteLine($"[HEALTH] TIMEOUT ({motivo}). Intento {intento}/{maxIntentos}. Reintentando en {delayMs}ms. Detalle: {ex.Message}");
+                    Utilidades.EscribirEnLog($"[HEALTH] TIMEOUT ({motivo}). Intento {intento}/{maxIntentos}. Reintentando en {delayMs}ms. Detalle: {ex.Message}");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[HEALTH] ERROR ({motivo}). Intento {intento}/{maxIntentos}. Reintentando en {delayMs}ms. Detalle: {ex.Message}");
+                    Utilidades.EscribirEnLog($"[HEALTH] ERROR ({motivo}). Intento {intento}/{maxIntentos}. Reintentando en {delayMs}ms. Detalle: {ex.Message}");
                 }
 
                 // Si es best-effort, reintenta un poco y sigue; si es infinito, queda esperando siempre.
@@ -107,6 +109,7 @@ namespace Web_Service
 
             // Best-effort: si no pudo validar, no bloqueamos.
             Console.WriteLine($"[HEALTH] WARN: No se pudo validar estado ({motivo}) luego de {maxIntentos} intentos. Se continúa.");
+            Utilidades.EscribirEnLog($"[HEALTH] WARN: No se pudo validar estado ({motivo}) luego de {maxIntentos} intentos. Se continúa.");
         }
 
 
