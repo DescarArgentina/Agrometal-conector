@@ -96,6 +96,8 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                 string mbomProcesada = Path.GetFullPath(args[1]);
                 string bopInput = Path.GetFullPath(args[2]);
                 string bopProcesada = Path.GetFullPath(args[3]);
+                Tabla_SB1.BopInputPath = bopInput;
+
 
                 Utilidades.InicializarLogPorMbom(mbomInput);
                 Utilidades.EscribirEnLog($"Inicio ScriptPrincipal (Mutex OK). MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
@@ -587,6 +589,9 @@ ORDER BY
                         // Cargar XML a SQL sin cargar todo en memoria
                         CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
                     }
+                    Tabla_SB1.BopInputPath = carpetaInput;
+                    Tabla_SB1.BopProcesadaPath = carpetaProcesados;
+                    Tabla_SB1.CurrentBopCode = Path.GetFileNameWithoutExtension(archivo);
 
                     // Mover procesado (igual que antes)
                     string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
@@ -897,16 +902,24 @@ ORDER BY
                         CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
 
                         Console.WriteLine("[MBOM] Generando SB1...");
-                        var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM();
-                        Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
+                        HashSet<string> codigosFantasma;
+                        Console.WriteLine("[MBOM] Generando SB1...");
+                        var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM(out codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos. Fantasmas={codigosFantasma.Count}");
+
                         foreach (string s in listaSB1_MBOM)
                         {
                             Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
                             await Tabla_SB1.postSB1(s);
                         }
 
-                        Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
-                        var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
+                        Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM (solo fantasmas)...");
+                        var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM(codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre (fantasma).");
+
+                        await Tabla_SG1.postSG1(estructurasMBOM);
+                        Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
+
                         Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
                         await Tabla_SG1.postSG1(estructurasMBOM);
                         Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");

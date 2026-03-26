@@ -4,7 +4,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
-
+using Web_Service;
+using static Web_Service.Utilidades;
 public static class ProtheusHealth
 {
     private static readonly string UrlHealth = "http://119.8.73.193:8096/rest/TCEstado/Consultar/";
@@ -61,6 +62,7 @@ public static class ProtheusHealth
                 if (!resp.IsSuccessStatusCode)
                 {
                     Console.WriteLine($"[{tag}][HEALTH] HTTP {(int)resp.StatusCode}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}. Body: {body}");
+                    Utilidades.EscribirEnLog($"[{tag}][HEALTH] HTTP {(int)resp.StatusCode}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}. Body: {body}");
                     await Task.Delay(retryDelay);
                     continue;
                 }
@@ -80,6 +82,7 @@ public static class ProtheusHealth
                 if (!string.Equals(estado, "activo", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine($"[{tag}][HEALTH] Estado='{estado ?? "null"}'. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}. Body: {body}");
+                    Utilidades.EscribirEnLog($"[{tag}][HEALTH] HTTP {(int)resp.StatusCode}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}. Body: {body}");
                     await Task.Delay(retryDelay);
                     continue;
                 }
@@ -93,16 +96,19 @@ public static class ProtheusHealth
             {
                 // Este es el caso “timeout” que te describió Protheus
                 Console.WriteLine($"[{tag}][HEALTH] TIMEOUT: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
+                Utilidades.EscribirEnLog($"[{tag}][HEALTH] TIMEOUT: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
                 await Task.Delay(retryDelay);
             }
             catch (HttpRequestException ex)
             {
                 Console.WriteLine($"[{tag}][HEALTH] ERROR red/http: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
+                Utilidades.EscribirEnLog($"[{tag}][HEALTH] ERROR red/http: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
                 await Task.Delay(retryDelay);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[{tag}][HEALTH] ERROR inesperado: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
+                Utilidades.EscribirEnLog($"[{tag}][HEALTH] ERROR inesperado: {ex.Message}. Reintentando en {retryDelay.TotalMinutes} min. Intento #{intento}");
                 await Task.Delay(retryDelay);
             }
         }
