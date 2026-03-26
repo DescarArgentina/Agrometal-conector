@@ -11,238 +11,932 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
+using static Web_Service.SqlToJsonConverter;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
+
+
+
 
 namespace Web_Service // Note: actual namespace depends on the project name.
 {
     internal class Program
     {
+        // MUTEX GLOBAL (single instance)
+        private const string GlobalMutexName = @"Global\DescarConector_WebService_SingleInstance";
+        private static Mutex? _singleInstanceMutex;
+        private static bool _mutexHeld;
+
+
         // Modelos para mapear los datos de SQL
 
         static async Task Main(string[] args)
         {
+            Mutex? singleInstanceMutex = null;
+            bool ownsMutex = false;
 
-            string connectionString = @"Data Source=DEPLM-11-PC\SQLEXPRESS;Initial Catalog=AgrometalBop;
-                                        Integrated Security=True;TrustServerCertificate=True";
+            try
+            {
+                // 0) MUTEX GLOBAL (una sola instancia en todo el SO)
+                // Nota: "Global\" puede requerir privilegios para crearse si lo corrés manual como usuario no-admin.
+                // En servicio (LocalSystem) normalmente no hay problema.
+                try
+                {
+                    // Crea o abre el mutex (si ya existe, createdNew=false, pero igual tenemos el handle)
+                    singleInstanceMutex = new Mutex(false, GlobalMutexName, out _);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // No pude crearlo (típico si existe con ACL restrictiva o falta privilegio).
+                    // Intento abrir el mutex existente:
+                    try
+                    {
+                        singleInstanceMutex = Mutex.OpenExisting(GlobalMutexName);
+                    }
+                    catch (Exception openEx)
+                    {
+                        Console.WriteLine($"No se pudo crear/abrir el mutex global '{GlobalMutexName}'. " +
+                                          $"Ejecutá como Administrador o corré solo vía servicio. Detalle: {openEx.Message}");
+                        Environment.ExitCode = 11;
+                        return;
+                    }
+                }
 
-            await ProcesarMBOM(connectionString);
-            await ProcesarBOP(connectionString);
+                // Intento adquirirlo al instante (0 ms). Si no lo puedo adquirir, hay otra instancia corriendo.
+                try
+                {
+                    ownsMutex = singleInstanceMutex.WaitOne(0, false);
+                }
+                catch (AbandonedMutexException)
+                {
+                    // La instancia anterior murió sin liberar: se considera adquirido.
+                    ownsMutex = true;
+                }
 
+                if (!ownsMutex)
+                {
+                    Console.WriteLine("Ya existe otra instancia de Web_Service.exe ejecutándose. Esta instancia finalizará.");
+                    Environment.ExitCode = 10;
+                    return;
+                }
+
+                // 1) Validación de parámetros
+                if (args == null || args.Length < 4)
+                {
+                    Console.WriteLine("Uso:");
+                    Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
+                    Console.WriteLine("Ejemplo:");
+                    Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                string mbomInput = Path.GetFullPath(args[0]);
+                string mbomProcesada = Path.GetFullPath(args[1]);
+                string bopInput = Path.GetFullPath(args[2]);
+                string bopProcesada = Path.GetFullPath(args[3]);
+                Tabla_SB1.BopInputPath = bopInput;
+
+
+                Utilidades.InicializarLogPorMbom(mbomInput);
+                Utilidades.EscribirEnLog($"Inicio ScriptPrincipal (Mutex OK). MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
+
+                // 2) Validación/creación de carpetas (mínimo)
+                if (!Directory.Exists(mbomInput))
+                {
+                    Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
+                    Environment.ExitCode = 2;
+                    return;
+                }
+                if (!Directory.Exists(bopInput))
+                {
+                    Console.WriteLine($"No existe BOP_Input: {bopInput}");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+
+                Directory.CreateDirectory(mbomProcesada);
+                Directory.CreateDirectory(bopProcesada);
+
+                // 3) ConnectionString
+                //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+                string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+
+                // 4) Procesar MBOM
+                await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
+
+                // 5) Limpiar BD ANTES de BOP
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    BorrarTabla(conn, new Dictionary<string, TableBucket>());
+                }
+
+                // 6) Procesar BOP
+                await ProcesarBOP(connectionString, bopInput, bopProcesada);
+
+                Environment.ExitCode = 0;
+            }
+            catch (Exception ex)
+            {
+                // Si ya inicializaste log por MBOM, esto quedará registrado
+                try { Utilidades.EscribirEnLog($"[FATAL] Excepción no controlada en Main: {ex}"); } catch { }
+                Console.WriteLine(ex.ToString());
+                Environment.ExitCode = 99;
+            }
+            finally
+            {
+                // Liberar mutex SOLO si lo adquirimos
+                if (singleInstanceMutex != null)
+                {
+                    if (ownsMutex)
+                    {
+                        try { singleInstanceMutex.ReleaseMutex(); } catch { /* noop */ }
+                    }
+                    singleInstanceMutex.Dispose();
+                }
+            }
         }
 
-        private static async Task ProcesarBOP(string connectionString)
+
+
+        static string? NormalizarRef(string? v)
+        {
+            if (string.IsNullOrWhiteSpace(v)) return null;
+
+            // Casos típicos en PLMXML
+            if (v.StartsWith("#id", StringComparison.OrdinalIgnoreCase)) return v.Substring(3);
+            if (v.StartsWith("id", StringComparison.OrdinalIgnoreCase)) return v.Substring(2);
+            if (v.StartsWith("#", StringComparison.OrdinalIgnoreCase)) return v.Substring(1);
+
+            return v;
+        }
+        public class TableBucket
+        {
+            public string TableName { get; set; } = string.Empty;
+
+            // Conjunto de nombres de columnas encontradas
+            public HashSet<string> Attributes { get; } = new HashSet<string>();
+
+            // True si al menos un nodo de esta tabla tiene atributo "id"
+            public bool HasIdAttribute { get; set; }
+
+            // Todos los nodos XML de esta tabla (cada ocurrencia)
+            public List<XmlNode> Nodes { get; } = new List<XmlNode>();
+        }
+        private static async Task ProcesarBOP(string connectionString, string carpetaInput, string carpetaProcesados)
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO BOP ===");
 
-            string sqlQuery = @"WITH FirstProcessName AS (
-        SELECT RIGHT(p.catalogueId, 6) AS first_process_name
-        FROM Process p
-        INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-        INNER JOIN ProcessOccurrence po ON pr.id_Table = po.instancedRef
-        WHERE po.parentRef IS NULL
-    )
-    SELECT
-        fpn.first_process_name AS Process_codigo,          
+            string sqlQuery = @"WITH CTE_Hierarchy AS (
+    SELECT 
+        o.id_Table,
+        pr.name,
+        CASE WHEN LEFT(p.catalogueId, 2) = 'P-' 
+             THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2) 
+             ELSE p.catalogueId 
+        END AS catalogueId,
+        CAST(o.parentRef AS INT) AS parentRef,
+        pr.revision,
+        pr.subType,
+        o.idXml,
 
+        -- 👇 columnas alineadas con SB1
+        'PA' AS Tipo,
+        '01' AS Deposito,
         CASE 
-            WHEN LEFT(p.catalogueId, 1) IN ('M','E')
-                THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 1)
-            WHEN RIGHT(p.catalogueId, 3) = '-FV'
-                THEN LEFT(p.catalogueId, LEN(p.catalogueId) - 3)
-            ELSE p.catalogueId
-        END AS PR_Codigo,
+            WHEN uudUnidad.title = 'Agm4_Unidad'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Kilogramos' THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Litros'     THEN uudUnidad.value
+            WHEN uudUnidad.title = 'Agm4_Metros'     THEN uudUnidad.value
+            ELSE 'UN'
+        END AS unMedida
 
+    FROM ProcessOccurrence o
+    INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
+    INNER JOIN Process p          ON pr.masterRef   = p.id_Table
+    LEFT JOIN Form fUnidad
+           ON p.catalogueId = CASE
+                                WHEN CHARINDEX('/', fUnidad.name) > 0 
+                                     THEN LEFT(fUnidad.name, CHARINDEX('/', fUnidad.name) - 1)
+                                ELSE fUnidad.name
+                             END
+    LEFT JOIN UserValue_UserData uudUnidad
+           ON fUnidad.id_Table + 9 = uudUnidad.id_Father
+          AND p.idXml              = uudUnidad.idXml
+),
+
+CTE_Niveles AS (
+    -- Nivel 0 → nodos raíz
+    SELECT 
+        h.*,
+        0 AS Nivel
+    FROM CTE_Hierarchy h
+    WHERE h.parentRef IS NULL OR h.parentRef = 0
+
+    UNION ALL
+
+    -- Niveles siguientes (hijos)
+    SELECT 
+        h.*,
+        n.Nivel + 1
+    FROM CTE_Hierarchy h
+    INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
+)
+
+-- 🟢 PRIMERA PARTE: jerarquía
+SELECT
+    COALESCE(Parent.name, '')        AS Nombre_Padre,
+    COALESCE(Parent.catalogueId, '') AS Process_codigo,
+    Child.name                       AS Nombre_Hijo,
+    Child.catalogueId                AS PR_Codigo,
+    Child.subType                    AS Subtype_Hijo,
+    Child.revision                   AS Revision,
+    1                                AS CantidadHijo_Total,
+    nChild.Nivel                     AS Nivel,
+    Child.Tipo,
+    Child.Deposito,
+    Child.unMedida
+FROM CTE_Niveles nChild
+LEFT JOIN CTE_Niveles   nParent ON nChild.parentRef = nParent.id_Table
+LEFT JOIN CTE_Hierarchy Parent  ON nParent.id_Table = Parent.id_Table
+LEFT JOIN CTE_Hierarchy Child   ON nChild.id_Table  = Child.id_Table
+
+UNION ALL
+
+-- 🟠 SEGUNDA PARTE: MEConsumed (hojas) con la MISMA lógica de unidad
+SELECT 
+    Operation.name                      AS Nombre_Padre,
+    p2.catalogueId                      AS Process_codigo,
+    p.name                              AS Nombre_Hijo,
+    CASE WHEN LEFT(productId, 1) = 'E' 
+         THEN RIGHT(productId, LEN(productId) - 1) 
+         ELSE productId 
+    END                                 AS PR_Codigo,
+    pr.subType                          AS Subtype_Hijo,
+    pr.revision                         AS Revision,
+    COUNT(productId)                    AS CantidadHijo_Total,
+    3                                   AS Nivel,
+    'PA'                                AS Tipo,
+    '01'                                AS Deposito,
+    -- 👇 lógica de unidad de medida aplicada también acá
+    MAX(
         CASE 
-            WHEN LEFT(prod.productId, 1) IN ('M','E')
-                THEN RIGHT(prod.productId, LEN(prod.productId) - 1)
-            WHEN RIGHT(prod.productId, 3) = '-FV'
-                THEN LEFT(prod.productId, LEN(prod.productId) - 3)
-            ELSE prod.productId
-        END AS Codigo,
+            WHEN uudUnidad2.title = 'Agm4_Unidad'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Kilogramos' THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Litros'     THEN uudUnidad2.value
+            WHEN uudUnidad2.title = 'Agm4_Metros'     THEN uudUnidad2.value
+            ELSE 'UN'
+        END
+    )                                   AS unMedida
 
-        COUNT(prod.productId) AS Cantidad,
-        prod_rev.subType AS subType
-    FROM Process p
-    INNER JOIN ProcessRevision pr ON pr.masterRef = p.id_Table
-    INNER JOIN ProcessOccurrence po ON po.instancedRef = pr.id_Table
-    INNER JOIN ProcessOccurrence po_op ON po_op.parentRef = po.id_Table
-    LEFT JOIN OperationRevision op_rev ON op_rev.id_Table = po_op.instancedRef
-    LEFT JOIN Operation op ON op.id_Table = op_rev.masterRef
-    LEFT JOIN Occurrence o ON o.parentRef = po_op.id_Table
-       AND o.subType NOT IN ('MEWorkArea', 'METool')
-    LEFT JOIN ProductRevision prod_rev ON prod_rev.id_Table = o.instancedRef
-    LEFT JOIN Product prod ON prod.id_Table = prod_rev.masterRef
-    CROSS JOIN FirstProcessName fpn
-    WHERE prod.productId IS NOT NULL
-    GROUP BY fpn.first_process_name, p.catalogueId, prod.productId, prod_rev.subType
-    ORDER BY PR_Codigo DESC, Codigo;";
+FROM Occurrence
+INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
+INNER JOIN Product         p  ON p.id_Table  = pr.masterRef
+LEFT JOIN ProcessOccurrence o   ON Occurrence.parentRef = o.id_Table
+LEFT JOIN OperationRevision op  ON op.id_Table         = o.instancedRef
+LEFT JOIN Operation             ON Operation.id_Table  = op.masterRef
+LEFT JOIN ProcessOccurrence o2  ON o2.id_Table         = o.parentRef
+LEFT JOIN ProcessRevision pr2   ON o2.instancedRef     = pr2.id_Table
+LEFT JOIN Process p2            ON pr2.masterRef       = p2.id_Table
 
+-- 👇 joins para unidad de medida en la rama MEConsumed
+LEFT JOIN Form fUnidad2
+       ON p2.catalogueId = CASE
+                             WHEN CHARINDEX('/', fUnidad2.name) > 0 
+                                  THEN LEFT(fUnidad2.name, CHARINDEX('/', fUnidad2.name) - 1)
+                             ELSE fUnidad2.name
+                          END
+LEFT JOIN UserValue_UserData uudUnidad2
+       ON fUnidad2.id_Table + 9 = uudUnidad2.id_Father
+      AND p2.idXml              = uudUnidad2.idXml
+
+WHERE Occurrence.subType = 'MEConsumed'
+GROUP BY 
+    Operation.name,
+    p2.catalogueId,
+    p.name,
+    productId,
+    pr.subType,
+    pr.revision
+ORDER BY 
+    Nivel,
+    PR_Codigo DESC;
+";
+
+            Sg1Exclusions.Clear();
             var converter = new SqlToJsonConverter(connectionString);
-            XmlDocument xmlDoc = new XmlDocument();
-
-            string carpetaInput = @"E:\a\Rodrigo Bertero\BOP_input";
-            string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalBOP";
 
             if (!Directory.Exists(carpetaInput))
             {
                 Console.WriteLine("No existe carpeta BOP_input");
                 return;
             }
+            Directory.CreateDirectory(carpetaProcesados);
 
-            string[] archivos = Directory.GetFiles(carpetaInput);
+            var archivos = Directory.EnumerateFiles(carpetaInput)
+    .Where(f =>
+    {
+        var ext = Path.GetExtension(f);
+        return ext.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase);
+    })
+    .ToArray();
+
             int contadorXmls = 1;
-            bool borrarTablas = true;
+
+            // --- helper local: carga XML en SQL sin cargar todo en RAM ---
+            static void CargarXmlEnSqlStreaming(SqlConnection connection, string xmlPath, int idXml)
+            {
+                var ignorados = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplicationRef","AttributeContext","RevisionRule","Site","Transform","View"
+        };
+
+                var createdTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var knownCols = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+                void EnsureTable(string tableName, bool hasIdAttr)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (createdTables.Contains(tableName))
+                        return;
+
+                    string sql =
+                        $"IF OBJECT_ID(N'[{tableName}]', 'U') IS NULL " +
+                        $"BEGIN " +
+                        $"CREATE TABLE [{tableName}] (" +
+                        $"id INT IDENTITY(1,1) PRIMARY KEY, " +
+                        $"contenido NVARCHAR(MAX), " +
+                        $"id_Table NVARCHAR(MAX) NULL, " +
+                        $"id_Father NVARCHAR(MAX) NULL, " +
+                        $"idXml INT" +
+                        $"); " +
+                        $"END;";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    createdTables.Add(tableName);
+
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "contenido", "id_Table", "id_Father", "idXml"
+};
+                    knownCols[tableName] = cols;
+                }
+
+                void EnsureColumn(string tableName, string columnName)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (!knownCols.TryGetValue(tableName, out var cols))
+                    {
+                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        knownCols[tableName] = cols;
+                    }
+
+                    if (cols.Contains(columnName))
+                        return;
+
+                    string sql =
+                        $"IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
+                        $"ALTER TABLE [{tableName}] ADD [{columnName}] NVARCHAR(MAX);";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    cols.Add(columnName);
+                }
+
+                var settings = new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Ignore,
+                    IgnoreComments = true,
+                    IgnoreProcessingInstructions = true,
+                    IgnoreWhitespace = true
+                };
+
+                var nameStack = new Stack<string>();
+                var idStack = new Stack<string>();
+
+                nameStack.Push(string.Empty);
+                idStack.Push(""); // raíz => sin id (NULL en DB)
+
+                using var fs = File.OpenRead(xmlPath);
+                using var reader = XmlReader.Create(fs, settings);
+
+                while (reader.Read())
+                {
+                    if (reader.NodeType == XmlNodeType.Element)
+                    {
+                        string nodeName = reader.Name;
+
+                        // ignorados: en tu ParseNode no recursaba, así que acá skipeamos el sub-árbol
+                        if (ignorados.Contains(nodeName))
+                        {
+                            reader.Skip();
+                            continue;
+                        }
+
+                        string parentName = nameStack.Count > 0 ? nameStack.Peek() : string.Empty;
+
+                        // atributos
+                        var attrList = new List<(string Name, string Value)>();
+                        bool hasIdAttr = false;
+                        string idValueForStack = ""; // si el nodo no tiene id => NULL
+
+                        if (reader.HasAttributes)
+                        {
+                            while (reader.MoveToNextAttribute())
+                            {
+                                var an = reader.Name;
+                                var av = reader.Value ?? string.Empty;
+                                attrList.Add((an, av));
+
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    hasIdAttr = true;
+                                    if (!string.IsNullOrEmpty(av) && av.Length > 2)
+                                        idValueForStack = av.Substring(2);
+                                }
+                            }
+                            reader.MoveToElement();
+                        }
+
+                        // tabla (misma lógica que GetTableName)
+                        string tableName = nodeName;
+                        if (!hasIdAttr && !string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                            tableName = $"{nodeName}_{parentName}";
+
+                        bool isEmpty = reader.IsEmptyElement;
+
+                        // PLMXML: no insertás fila, pero sí afecta parentNodeName para hijos (como antes)
+                        if (!string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        {
+                            EnsureTable(tableName, hasIdAttr);
+
+                            // columnas base para el insert
+                            var colNames = new List<string>();
+                            var paramNames = new List<string>();
+                            var sqlParams = new List<SqlParameter>();
+                            int p = 0;
+
+                            // contenido (vacío para ahorrar RAM)
+                            colNames.Add("[contenido]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", ""));
+                            p++;
+
+                            // id_Table / id_Father
+                            // id_Table (NULL si el nodo no tiene id)
+                            EnsureColumn(tableName, "id_Table");
+                            colNames.Add("[id_Table]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(idValueForStack) ? (object)DBNull.Value : idValueForStack));
+                            p++;
+
+                            // id_Father (NULL si no hay id del padre)
+                            EnsureColumn(tableName, "id_Father");
+                            colNames.Add("[id_Father]");
+                            paramNames.Add($"@p{p}");
+                            string parentId = idStack.Count > 0 ? idStack.Peek() : "";
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(parentId) ? (object)DBNull.Value : parentId));
+                            p++;
+
+
+                            // atributos => columnas (respetando tu lógica de recortes)
+                            foreach (var (an, avRaw) in attrList)
+                            {
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                string? normalized = null;
+
+                                bool esRef =
+                                        an.Equals("instancedRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("masterRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("parentRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("instanceRefs", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("revisionRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("partRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("unitRef", StringComparison.OrdinalIgnoreCase);
+
+                                normalized = esRef ? (NormalizarRef(avRaw) ?? "") : avRaw;
+
+                                EnsureColumn(tableName, an);
+                                colNames.Add($"[{an}]");
+                                paramNames.Add($"@p{p}");
+                                sqlParams.Add(new SqlParameter($"@p{p}", normalized ?? ""));
+                                p++;
+                            }
+
+                            // idXml
+                            colNames.Add("[idXml]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", idXml));
+                            p++;
+
+                            string insertSql =
+                                $"INSERT INTO [{tableName}] ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", paramNames)});";
+
+                            using (var cmd = new SqlCommand(insertSql, connection))
+                            {
+                                cmd.Parameters.AddRange(sqlParams.ToArray());
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+
+                        // stack push/pop para mantener parentNodeName e id_Father igual que antes
+                        if (!isEmpty)
+                        {
+                            nameStack.Push(nodeName);
+                            idStack.Push(idValueForStack);
+                        }
+                    }
+                    else if (reader.NodeType == XmlNodeType.EndElement)
+                    {
+                        if (nameStack.Count > 1) nameStack.Pop();
+                        if (idStack.Count > 1) idStack.Pop();
+                    }
+                }
+            }
 
             foreach (string archivo in archivos)
             {
+                Sg1Exclusions.Clear();
+
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando BOP: {Path.GetFileName(archivo)}");
-                    xmlDoc.Load(archivo);
 
                     using (SqlConnection connection = new SqlConnection(connectionString))
                     {
                         connection.Open();
-                        XmlNode root = xmlDoc.DocumentElement;
-                        var groupedDataRows = new Dictionary<string, List<DataRow>>();
+                        Tabla_SB1.EnsureTablasOpcionalesSB1(connection);
 
-                        if (ParseNode(root, groupedDataRows))
-                        {
-                            if (borrarTablas)
-                            {
-                                BorrarTabla(connection, groupedDataRows);
-                                borrarTablas = false;
-                            }
+                        // Mantener tu comportamiento: borrar y recrear por XML
+                        BorrarTabla(connection, new Dictionary<string, TableBucket>());
 
-                            CreateTable(connection, groupedDataRows);
-                            InsertData(connection, groupedDataRows, archivo, contadorXmls);
+                        // Cargar XML a SQL sin cargar todo en memoria
+                        CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
+                    }
+                    Tabla_SB1.BopInputPath = carpetaInput;
+                    Tabla_SB1.BopProcesadaPath = carpetaProcesados;
+                    Tabla_SB1.CurrentBopCode = Path.GetFileNameWithoutExtension(archivo);
 
-                            // SB1 (productos)
-                            foreach (string s in Tablas_SG2_SH3.jsonSB1_BOP()) { 
-                                await Tabla_SB1.postSB1(s);
-                                Console.WriteLine("-- sb1 --");
-                                Console.WriteLine(s);
-                            }
-                            // SG1 (estructuras)
-                            var estructuras = Tabla_SG1.jsonSG1();
-                            await Tabla_SG1.postSG1(estructuras);
-                            Console.WriteLine("-- sg1 --");
-                            Console.WriteLine(estructuras);
-                            
+                    // Mover procesado (igual que antes)
+                    string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
+                    if (File.Exists(destino))
+                    {
+                        string baseName = Path.GetFileNameWithoutExtension(destino);
+                        string ext = Path.GetExtension(destino);
+                        destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+                    }
+                    File.Move(archivo, destino);
+                    contadorXmls++;
 
-                            // SG2/SH3 (procesos)
-                            var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
-                            foreach (string s in listaSG2) { 
-                                await Tablas_SG2_SH3.EnviarSG2_SH3(s);
-                                Console.WriteLine("-- sg2/sh3 --");
-                                Console.WriteLine(s);
-                            }
-                            // Mostrar la estructura
-                            Console.WriteLine("=== ESTRUCTURA JERÁRQUICA ===");
-                            converter.ShowBOMTree(sqlQuery);
-
-                            // JSONs jerárquicos
-                            Console.WriteLine("\n=== JSONs INDIVIDUALES ===");
-                            converter.ProcessHierarchicalJsons(sqlQuery);
-
-                            var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
-                            Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
-
-                            for (int i = 0; i < jsonStrings.Count; i++)
-                            {
-                                Console.WriteLine($"\nJSON #{i + 1}:");
-                                Console.WriteLine(jsonStrings[i]);
-                            }
-
-                            // Mover procesado
-                            string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
-                            if (File.Exists(destino))
-                            {
-                                string baseName = Path.GetFileNameWithoutExtension(destino);
-                                string ext = Path.GetExtension(destino);
-                                destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
-                            }
-                            File.Move(archivo, destino);
-                            contadorXmls++;
-                        }
+                    // SB1 (productos de la BOP)
+                    Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
+                    var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
+                    Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
+                    foreach (string s in listaSB1_BOP)
+                    {
+                        Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                        await Tabla_SB1.postSB1(s);
                     }
 
-                    Utilidades.EscribirEnLog($"BOP Procesado: {Path.GetFileName(archivo)}");
+                    // SG1 (estructuras de la BOP)
+                    Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
+                    var estructurasMBOM = Tabla_SG1.jsonSG1_BOP();
+                    Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+                    await Tabla_SG1.postSG1(estructurasMBOM);
+                    Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
+
+                    // SG2/SH3 (procesos)
+                    Console.WriteLine("[BOP] Generando SG2/SH3 (Procesos Productivos) desde BOP...");
+                    var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
+                    foreach (string s in listaSG2)
+                    {
+                        await Tablas_SG2_SH3.EnviarSG2_SH3(s);
+                        Utilidades.EscribirJSONEnLog(s);
+                    }
+
+                    // JSONs jerárquicos (igual que antes)
+                    Console.WriteLine("\n============================");
+                    try
+                    {
+                        //var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                    }
+                    catch (Exception exConv)
+                    {
+                        //Utilidades.EscribirEnLog($"[BOP][WARN] Falló ConvertToHierarchicalJsonStrings: {exConv.Message}\n{exConv}");
+                    }
+
+                    Utilidades.EscribirEnLog($"BOP Procesado: {Path.GetFileName(destino)}");
                 }
                 catch (Exception ea)
                 {
-                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\nError: {ea.Message}");
+                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\n{ea}");
                 }
             }
         }
 
-        private static async Task ProcesarMBOM(string connectionString)
+        private static async Task ProcesarMBOM(string connectionString, string carpetaInput, string carpetaProcesados)
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO MBOM ===");
-
-            XmlDocument xmlDoc = new XmlDocument();
-
-            string carpetaInput = @"E:\a\Rodrigo Bertero\MBOM_input";
-            string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalMBOM";
 
             if (!Directory.Exists(carpetaInput))
             {
                 Console.WriteLine("No existe carpeta MBOM_input");
                 return;
             }
+            Directory.CreateDirectory(carpetaProcesados);
 
-            string[] archivos = Directory.GetFiles(carpetaInput);
+            var archivos = Directory.EnumerateFiles(carpetaInput)
+    .Where(f =>
+    {
+        var ext = Path.GetExtension(f);
+        return ext.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase);
+    })
+    .ToArray();
+
             int contadorXmls = 1;
-            bool borrarTablas = true;
+
+            // --- helper local: carga XML en SQL sin cargar todo en RAM ---
+            static void CargarXmlEnSqlStreaming(SqlConnection connection, string xmlPath, int idXml)
+            {
+                var ignorados = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplicationRef","AttributeContext","RevisionRule","Site","Transform","View"
+        };
+
+                var createdTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var knownCols = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+                void EnsureTable(string tableName, bool hasIdAttr)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (createdTables.Contains(tableName))
+                        return;
+
+                    string sql =
+                        $"IF OBJECT_ID(N'[{tableName}]', 'U') IS NULL " +
+                        $"BEGIN " +
+                        $"CREATE TABLE [{tableName}] (" +
+                        $"id INT IDENTITY(1,1) PRIMARY KEY, " +
+                        $"contenido NVARCHAR(MAX), " +
+                        $"id_Table NVARCHAR(MAX) NULL, " +
+                        $"id_Father NVARCHAR(MAX) NULL, " +
+                        $"idXml INT" +
+                        $"); " +
+                        $"END;";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    createdTables.Add(tableName);
+
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "contenido", "id_Table", "id_Father", "idXml"
+};
+                    knownCols[tableName] = cols;
+                }
+
+                void EnsureColumn(string tableName, string columnName)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (!knownCols.TryGetValue(tableName, out var cols))
+                    {
+                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        knownCols[tableName] = cols;
+                    }
+
+                    if (cols.Contains(columnName))
+                        return;
+
+                    string sql =
+                        $"IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
+                        $"ALTER TABLE [{tableName}] ADD [{columnName}] NVARCHAR(MAX);";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    cols.Add(columnName);
+                }
+
+                var settings = new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Ignore,
+                    IgnoreComments = true,
+                    IgnoreProcessingInstructions = true,
+                    IgnoreWhitespace = true
+                };
+
+                var nameStack = new Stack<string>();
+                var idStack = new Stack<string>();
+                nameStack.Push(string.Empty);
+                idStack.Push("");
+
+                using var fs = File.OpenRead(xmlPath);
+                using var reader = XmlReader.Create(fs, settings);
+
+                while (reader.Read())
+                {
+                    if (reader.NodeType == XmlNodeType.Element)
+                    {
+                        string nodeName = reader.Name;
+
+                        if (ignorados.Contains(nodeName))
+                        {
+                            reader.Skip();
+                            continue;
+                        }
+
+                        string parentName = nameStack.Count > 0 ? nameStack.Peek() : string.Empty;
+
+                        var attrList = new List<(string Name, string Value)>();
+                        bool hasIdAttr = false;
+                        string idValueForStack = "";
+
+                        if (reader.HasAttributes)
+                        {
+                            while (reader.MoveToNextAttribute())
+                            {
+                                var an = reader.Name;
+                                var av = reader.Value ?? string.Empty;
+                                attrList.Add((an, av));
+
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    hasIdAttr = true;
+                                    if (!string.IsNullOrEmpty(av) && av.Length > 2)
+                                        idValueForStack = av.Substring(2);
+                                }
+                            }
+                            reader.MoveToElement();
+                        }
+
+                        string tableName = nodeName;
+                        if (!hasIdAttr && !string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                            tableName = $"{nodeName}_{parentName}";
+
+                        bool isEmpty = reader.IsEmptyElement;
+
+                        if (!string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        {
+                            EnsureTable(tableName, hasIdAttr);
+
+                            var colNames = new List<string>();
+                            var paramNames = new List<string>();
+                            var sqlParams = new List<SqlParameter>();
+                            int p = 0;
+
+                            colNames.Add("[contenido]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", ""));
+                            p++;
+
+                            // id_Table (NULL si el nodo no tiene id)
+                            EnsureColumn(tableName, "id_Table");
+                            colNames.Add("[id_Table]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(idValueForStack) ? (object)DBNull.Value : idValueForStack));
+                            p++;
+
+                            // id_Father (NULL si no hay id del padre)
+                            EnsureColumn(tableName, "id_Father");
+                            colNames.Add("[id_Father]");
+                            paramNames.Add($"@p{p}");
+                            string parentId = idStack.Count > 0 ? idStack.Peek() : "";
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(parentId) ? (object)DBNull.Value : parentId));
+                            p++;
+
+
+                            foreach (var (an, avRaw) in attrList)
+                            {
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                string? normalized = null;
+
+                                bool esRef =
+                                        an.Equals("instancedRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("masterRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("parentRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("instanceRefs", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("revisionRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("partRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("unitRef", StringComparison.OrdinalIgnoreCase);
+
+                                normalized = esRef ? (NormalizarRef(avRaw) ?? "") : avRaw;
+
+                                EnsureColumn(tableName, an);
+                                colNames.Add($"[{an}]");
+                                paramNames.Add($"@p{p}");
+                                sqlParams.Add(new SqlParameter($"@p{p}", normalized ?? ""));
+                                p++;
+                            }
+
+                            colNames.Add("[idXml]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", idXml));
+                            p++;
+
+                            string insertSql =
+                                $"INSERT INTO [{tableName}] ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", paramNames)});";
+
+                            using (var cmd = new SqlCommand(insertSql, connection))
+                            {
+                                cmd.Parameters.AddRange(sqlParams.ToArray());
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+
+                        if (!isEmpty)
+                        {
+                            nameStack.Push(nodeName);
+                            idStack.Push(idValueForStack);
+                        }
+                    }
+                    else if (reader.NodeType == XmlNodeType.EndElement)
+                    {
+                        if (nameStack.Count > 1) nameStack.Pop();
+                        if (idStack.Count > 1) idStack.Pop();
+                    }
+                }
+            }
 
             foreach (string archivo in archivos)
             {
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando MBOM: {Path.GetFileName(archivo)}");
-                    xmlDoc.Load(archivo);
 
                     using (SqlConnection connection = new SqlConnection(connectionString))
                     {
                         connection.Open();
-                        XmlNode root = xmlDoc.DocumentElement;
-                        var groupedDataRows = new Dictionary<string, List<DataRow>>();
+                        Tabla_SB1.EnsureTablasOpcionalesSB1(connection);
+                        // Mantener tu comportamiento: borrar y recrear por XML
+                        BorrarTabla(connection, new Dictionary<string, TableBucket>());
 
-                        if (ParseNode(root, groupedDataRows))
+                        // Cargar XML a SQL sin cargar todo en memoria
+                        CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
+
+                        Console.WriteLine("[MBOM] Generando SB1...");
+                        HashSet<string> codigosFantasma;
+                        Console.WriteLine("[MBOM] Generando SB1...");
+                        var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM(out codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos. Fantasmas={codigosFantasma.Count}");
+
+                        foreach (string s in listaSB1_MBOM)
                         {
-                            if (borrarTablas)
-                            {
-                                BorrarTabla(connection, groupedDataRows);
-                                borrarTablas = false;
-                            }
-
-                            CreateTable(connection, groupedDataRows);
-                            InsertData(connection, groupedDataRows, archivo, contadorXmls);
-
-                            // TODO: lógica de generación JSON para MBOM
-                            // TODO: integración a Protheus si aplica
-                            // SB1 (productos)
-                            foreach (string s in Tablas_SG2_SH3.jsonSB1_BOP())
-                                await Tabla_SB1.postSB1(s);
-
-                            // SG1 (estructuras)
-                            var estructuras = Tabla_SG1.jsonSG1();
-                            await Tabla_SG1.postSG1(estructuras);
-
-
-                            // Mover procesado
-                            string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
-                            if (File.Exists(destino))
-                            {
-                                string baseName = Path.GetFileNameWithoutExtension(destino);
-                                string ext = Path.GetExtension(destino);
-                                destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
-                            }
-                            File.Move(archivo, destino);
-                            contadorXmls++;
+                            Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                            await Tabla_SB1.postSB1(s);
                         }
+
+                        Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM (solo fantasmas)...");
+                        var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM(codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre (fantasma).");
+
+                        await Tabla_SG1.postSG1(estructurasMBOM);
+                        Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
+
+                        Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+                        await Tabla_SG1.postSG1(estructurasMBOM);
+                        Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
                     }
 
-                    Utilidades.EscribirEnLog($"MBOM Procesado: {Path.GetFileName(archivo)}");
+                    // Mover procesado (igual que antes)
+                    string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
+                    if (File.Exists(destino))
+                    {
+                        string baseName = Path.GetFileNameWithoutExtension(destino);
+                        string ext = Path.GetExtension(destino);
+                        destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+                    }
+                    File.Move(archivo, destino);
+                    contadorXmls++;
+
+                    Utilidades.EscribirEnLog($"MBOM Procesado: {Path.GetFileName(destino)}");
                 }
                 catch (Exception ea)
                 {
@@ -250,6 +944,7 @@ namespace Web_Service // Note: actual namespace depends on the project name.
                 }
             }
         }
+
 
 
 
@@ -280,433 +975,47 @@ namespace Web_Service // Note: actual namespace depends on the project name.
             }
         }
 
-        //static Dictionary<string, string> Workarea(string connectionString) //Esto obtiene el workarea del proceso
-        //{
-        //    string sqlworkarea = @"SELECT
-	       //                         guest.Process.catalogueId AS instancedProcess,
-	       //                         guest.WorkArea.catalogueId AS instancedWorkArea        
-	       //                         FROM
-		      //                          guest.ProcessOccurrence
-	       //                         CROSS APPLY (
-		      //                          SELECT TRIM(value) AS FormID, ProcessOccurrence.id_Table
-		      //                          FROM STRING_SPLIT(ProcessOccurrence.occurrenceRefs, ' ')
-		      //                          WHERE value <> ''
-	       //                         ) AS squary1
-	       //                         JOIN guest.Occurrence AS occ ON TRY_CAST(SUBSTRING(squary1.FormID, 3, LEN(squary1.FormID)) AS INT) = Occ.parentRef and occ.idXml = ProcessOccurrence.idXml
-	       //                         JOIN guest.ProcessRevision ON ProcessRevision.id_Table = ProcessOccurrence.instancedRef and ProcessRevision.idXml = ProcessOccurrence.idXml
-	       //                         JOIN guest.Process ON ProcessRevision.masterRef = Process.id_Table and ProcessRevision.idXml = Process.idXml
-	       //                         JOIN guest.WorkAreaRevision ON WorkAreaRevision.id_Table = occ.instancedRef and WorkAreaRevision.idXml = occ.idXml
-	       //                         JOIN guest.WorkArea ON WorkAreaRevision.masterRef = WorkArea.id_Table and WorkAreaRevision.idXml = WorkArea.idXml
-	       //                         WHERE
-	       //                         occ.subType = 'MEWorkArea'
-	       //                         AND ProcessOccurrence.id_Table = squary1.id_Table";
-
-        //    Dictionary<string, string> resultDictionary = new Dictionary<string, string>();
-
-        //    using (SqlConnection connection = new SqlConnection(connectionString))
-        //    {
-        //        try
-        //        {
-        //            connection.Open();
-
-        //            SqlCommand command = new SqlCommand(sqlworkarea, connection);
-        //            SqlDataReader reader = command.ExecuteReader();
-
-        //            while (reader.Read())
-        //            {
-        //                // Leer valores de las columnas
-        //                string instancedProcess = reader.GetString(0);
-        //                string instancedWorkArea = reader.GetString(1);
-
-        //                // Agregar al diccionario
-        //                resultDictionary[instancedProcess] = instancedWorkArea;
-        //            }
-
-        //            reader.Close();
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Utilidades.EscribirEnLog("Error en la consulta de WorkArea: " + ex.Message);
-        //        }
-        //    }
-
-        //    return resultDictionary;
-
-        //}
-        //static List<Dictionary<string, string>> MbomBop(string connectionString) //Relación MBOM-BOP con General Relation
-        //{
-        //    string sqlRelated = @"select distinct squary1.FormID, CAST(squary1.id_Table as INT),GeneralRelation.relatedRefs,case when ProductRevision.id_Table is not null then Product.productId
-		      //                          when guest.ProductRevision.id_Table is null then Process.catalogueId end , GeneralRelation.idXml                                                                
-		      //                          from
-		      //                          guest.GeneralRelation
-		      //                          cross apply (SELECT TRIM(value) AS FormID, GeneralRelation.id_Table
-		      //                          FROM STRING_SPLIT(GeneralRelation.relatedRefs, ' ') WHERE value <> '') AS squary1
-		      //                          LEFT JOIN guest.ProductRevision ON TRY_CAST(SUBSTRING(squary1.FormID, 4, LEN(squary1.FormID)) AS INT) = ProductRevision.id_Table and GeneralRelation.idXml = ProductRevision.idXml
-		      //                          LEFT JOIN guest.ProcessRevision ON TRY_CAST(SUBSTRING(squary1.FormID, 4, LEN(squary1.FormID)) AS INT) = ProcessRevision.id_Table and GeneralRelation.idXml = ProcessRevision.idXml
-
-		      //                          left join guest.Product on Product.id_Table = ProductRevision.masterRef and Product.idXml = ProductRevision.idXml
-		      //                          left join guest.Process on Process.id_Table = ProcessRevision.masterRef and Process.idXml = ProcessRevision.idXml
-
-		      //                          where GeneralRelation.id_Table = squary1.id_Table
-		      //                          order by GeneralRelation.idXml ASC";
-        //    List<Dictionary<string, string>> listRelatedMbomBop = new List<Dictionary<string, string>>();
-
-        //    using (SqlConnection connection = new SqlConnection(connectionString))
-        //    {
-
-        //        connection.Open();
-        //        SqlCommand command3 = new SqlCommand(sqlRelated, connection);
-        //        SqlDataReader reader3 = command3.ExecuteReader();
-
-        //        try
-        //        {
-        //            int idtableAux = 0;
-        //            int idXmlAux = 0;
-        //            string codigoAux = string.Empty;
-
-        //            while (reader3.Read())
-        //            {
-        //                if (reader3.GetInt32(1) == idtableAux && reader3.GetInt32(4) == idXmlAux)
-        //                {
-        //                    string valCodigo = reader3.IsDBNull(3) ? string.Empty : reader3.GetString(3);
-
-        //                    Dictionary<string, string> diccionario1 = new Dictionary<string, string>
-        //                                        {
-        //                                            { valCodigo, codigoAux }
-        //                                        };
-        //                    listRelatedMbomBop.Add(diccionario1);
-
-        //                    codigoAux = string.Empty;
-        //                }
-        //                else
-        //                {
-        //                    codigoAux = reader3.IsDBNull(3) ? string.Empty : reader3.GetString(3);
-        //                }
-
-        //                idtableAux = reader3.GetInt32(1);
-        //                idXmlAux = reader3.GetInt32(4);
-        //            }
-        //        }
-        //        catch (Exception ea)
-        //        {
-        //            Utilidades.EscribirEnLog("Error en la consulta, related MBOM - BOP: " + ea.Message);
-        //        }
-        //        finally
-        //        {
-        //            command3.Cancel();
-        //            reader3.Close();
-        //            command3.Dispose();
-        //        }
-        //    }
-
-        //    return listRelatedMbomBop;
-        //}
-        //static void LimpiarCarpeta(string carpeta) //Limpia la carpeta donde se exportan todos los Xmls, uno por uno antes de volver a exportar más de otra estructura
-        //{
-        //    try
-        //    {
-
-
-        //        if (Directory.Exists(carpeta))
-        //        {
-        //            // Borra todos los archivos en la carpeta
-        //            string[] archivos = Directory.GetFiles(carpeta);
-        //            foreach (string archivo in archivos)
-        //            {
-        //                File.Delete(archivo);
-        //            }
-
-        //            Utilidades.EscribirEnLog($"Carpeta {carpeta} limpiada correctamente.");
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // Maneja cualquier excepción que pueda ocurrir durante la limpieza
-        //        Utilidades.EscribirEnLog($"Error al limpiar la carpeta: {ex.Message}");
-        //    }
-        //}  
-
-        // --------------------------------------------- Metodos utilizados por el Main() Carga en Base de datos de BOP ---------------------------------------------
-        static void BorrarTabla(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows)
-        {
-            foreach (var group in groupedDataRows)
-            {
-                try
-                {
-                    string sql = @"
-                                    DECLARE @sql NVARCHAR(MAX) = N'';
-
-                                    SELECT @sql = STRING_AGG(
-                                            'DROP TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name),
-                                            '; '
-                                        )
-                                    FROM sys.tables t
-                                    JOIN sys.schemas s ON s.schema_id = t.schema_id
-                                    WHERE s.name = 'dbo';  -- Cambiar si usás otro esquema
-
-                                    IF @sql IS NOT NULL AND @sql <> ''
-                                        EXEC (@sql);";
-
-                    using (var cmd = new SqlCommand(sql, connection))
-                    {
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    Utilidades.EscribirEnLog("✔ Todas las tablas del esquema dbo fueron eliminadas correctamente.");
-                }
-                catch (Exception ex)
-                {
-                    Utilidades.EscribirEnLog($"❌ Error al intentar eliminar tablas: {ex.Message}");
-                }
-           
-            }
-        }
-
-        static bool ParseNode(XmlNode node, Dictionary<string, List<DataRow>> groupedDataRows, string parentNodeName = "")
-        {
-            // Crear una lista de nombres de nodos a ignorar
-            var listaIgnorados = new List<string> { "ApplicationRef", "AssociatedDataSet", "AttributeContext", "DataSet",
-                                                        "ExternalFile", "Folder", "ProductDef",
-                                                         "RevisionRule", "Site", "Transform", "View" };
-            try
-            {
-                if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
-                {
-                    string nodeName = node.Name; //Nombre actual del nodo
-
-                    DataRow dataRow = new DataRow(); //Nuevo objeto datarow
-                    dataRow.NombreNodo = nodeName;
-
-
-                    dataRow.Atributos = new List<string>();
-
-                    foreach (XmlAttribute attribute in node.Attributes)
-                    {
-                        dataRow.Atributos.Add(attribute.Name); //Guarda los nombres de los atributos
-                    }
-
-                    dataRow.XmlNode = node;
-                    string tableName = GetTableName(nodeName, dataRow.Atributos, parentNodeName); //Creacion de nombre de la tabla
-
-                    if (!groupedDataRows.ContainsKey(tableName))
-                    {
-                        groupedDataRows[tableName] = new List<DataRow>();
-                    }
-                    groupedDataRows[tableName].Add(dataRow);
-
-                    foreach (XmlNode childNode in node.ChildNodes)
-                    {
-                        ParseNode(childNode, groupedDataRows, nodeName); //recursividad
-                    }
-                    return true;
-                }
-                return false;
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog("Excepcion controlada en el metodo ParseNode: " + ea.Message);
-                return false;
-            }
-
-        }
-
-        static string GetTableName(string nodeName, List<string> attributes, string parentNodeName)
-        {
-            string tableName = nodeName;
-            if (!attributes.Contains("id") && tableName != "PLMXML") //Si no tiene el atributo id y no es el nodo PLMXML
-            {
-
-                tableName = $"{nodeName}_{parentNodeName}";
-            }
-            return tableName;
-        }
-
-        static void CreateTable(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows)
+        static void BorrarTabla(SqlConnection connection, Dictionary<string, TableBucket> tables)
         {
             try
             {
-                foreach (var group in groupedDataRows)
+                string sql = @"
+        DECLARE @sql NVARCHAR(MAX) = N'';
+
+        SELECT @sql = STRING_AGG(
+                'DROP TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name),
+                '; '
+            )
+        FROM sys.tables t
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE s.name = 'dbo'
+          AND t.name NOT IN ('SG1');  -- ⬅️ NO borrar la tabla SG1
+
+        IF @sql IS NOT NULL AND @sql <> ''
+            EXEC (@sql);";
+
+                using (var cmd = new SqlCommand(sql, connection))
                 {
-
-                    string tableName = group.Key;
-                    if (tableName == "PLMXML") // Saltar el nodo "PLMXML"
-                    {
-                        continue;
-                    }
-                    string createTableQuery = $"IF OBJECT_ID('[{tableName}]', 'U') IS NULL CREATE TABLE [{tableName}] (id INT IDENTITY(1,1) PRIMARY KEY, contenido NVARCHAR(MAX)";
-                    List<string> additionalAttributes = new List<string>();
-                    bool hasIdAttribute = false;
-
-                    foreach (DataRow dataRow in group.Value)
-                    {
-                        foreach (string attribute in dataRow.Atributos)
-                        {
-                            if (!additionalAttributes.Contains(attribute) && attribute != "id") //Adicional atributo
-                            {
-                                additionalAttributes.Add(attribute);
-                            }
-                            if (attribute == "id") //Existe el atributo id
-                            {
-                                hasIdAttribute = true;
-                            }
-                        }
-                    }
-
-                    if (hasIdAttribute) // Existe el atributo "id", agregar id_Table
-                    {
-                        createTableQuery += ", id_Table NVARCHAR(MAX) ";
-                    }
-                    else // No existe el atributo "id", agregar id_Father
-                    {
-                        createTableQuery += ", id_Father NVARCHAR(MAX) ";
-                    }
-                    foreach (string columnName in additionalAttributes) //Creacion de columnas
-                    {
-                        if (columnName != "id")
-                        {
-                            createTableQuery += $", [{columnName}] NVARCHAR(MAX)";
-                        }
-                    }
-                    createTableQuery += ", idXml INT);";
-                    using (SqlCommand command = new SqlCommand(createTableQuery, connection))
-                    {
-                        command.ExecuteNonQuery();
-                    }
+                    cmd.ExecuteNonQuery();
                 }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo createTable: {ea.Message}");
-                throw;
-            }
 
+                Utilidades.EscribirEnLog("Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
+                Console.WriteLine("Todas las tablas del esquema dbo fueron eliminadas correctamente (excepto SG1).");
+            }
+            catch (Exception ex)
+            {
+                Utilidades.EscribirEnLog($"Error al intentar eliminar tablas: {ex.Message}");
+                Console.WriteLine($"Error al intentar eliminar tablas: {ex.Message}");
+            }
         }
 
-        static void AlterTable(SqlConnection connection, string tableName, string columnName, string columnType)
-        {
-            try
-            {
-                string alterTableQuery = $"IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
-                $"ALTER TABLE [{tableName}] ADD [{columnName}] {columnType};";
+        private static readonly HashSet<string> NodosIgnorados = new(StringComparer.OrdinalIgnoreCase)
+{
+    "ApplicationRef", "AttributeContext",
+    "RevisionRule", "Site", "Transform", "View"
+};
 
-                using (SqlCommand command = new SqlCommand(alterTableQuery, connection))
-                {
-                    command.ExecuteNonQuery();
-                }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo AlterTable: {ea.Message}");
-                throw;
-            }
+        
 
-        }
-
-        static void InsertData(SqlConnection connection, Dictionary<string, List<DataRow>> groupedDataRows, string xml, int contadorXmls)
-        {
-            try
-            {
-                foreach (var group in groupedDataRows)
-                {
-                    string tableName = group.Key;
-
-                    foreach (DataRow dataRow in group.Value)
-                    {
-                        if (dataRow.NombreNodo == "PLMXML") // Saltar el nodo "PLMXML"
-                            continue;
-                        string insertQuery = $"INSERT INTO [{tableName}] (";
-                        List<string> columnNames = new List<string>();
-                        List<string> parameterNames = new List<string>();
-                        List<SqlParameter> parameters = new List<SqlParameter>();
-                        bool hasIdAttribute = false;
-
-
-                        foreach (string columnName in dataRow.Atributos)
-                        {
-
-                            if (columnName == "id" || columnName == "instancedRef" || columnName == "masterRef" || columnName == "parentRef" || columnName == "instanceRefs") //Columna id_Table, instancedRef y masterRef
-                            {
-                                string attributeValue1 = dataRow.XmlNode.Attributes[columnName]?.Value;
-
-                                if (columnName == "id" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-                                {
-                                    hasIdAttribute = true;
-                                    columnNames.Add("[id_Table]");
-                                    parameterNames.Add("@id");
-                                    attributeValue1 = attributeValue1.Substring(2); //Suprimir los dos primeros caracteres
-                                    parameters.Add(new SqlParameter("@id", attributeValue1));
-                                }
-                                if (columnName == "instancedRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-                                {
-                                    columnNames.Add("[instancedRef]");
-                                    parameterNames.Add("@instancedRef");
-                                    attributeValue1 = attributeValue1.Substring(3); //Suprimir los dos primeros caracteres
-                                    parameters.Add(new SqlParameter("@instancedRef", attributeValue1));
-                                }
-                                if (columnName == "masterRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-                                {
-                                    columnNames.Add("[masterRef]");
-                                    parameterNames.Add("@masterRef");
-                                    attributeValue1 = attributeValue1.Substring(3); //Suprimir los dos primeros caracteres
-                                    parameters.Add(new SqlParameter("@masterRef", attributeValue1));
-                                }
-                                if (columnName == "parentRef" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-                                {
-                                    columnNames.Add("[parentRef]");
-                                    parameterNames.Add("@parentRef");
-                                    attributeValue1 = attributeValue1.Substring(3); //Suprimir los tres primeros caracteres
-                                    parameters.Add(new SqlParameter("@parentRef", attributeValue1));
-                                }
-                                if (columnName == "instanceRefs" && !string.IsNullOrEmpty(attributeValue1) && attributeValue1.Length > 2)
-                                {
-                                    columnNames.Add("[instanceRefs]");
-                                    parameterNames.Add("@instanceRefs");
-                                    attributeValue1 = attributeValue1.Substring(3); //Suprimir los tres primeros caracteres
-                                    parameters.Add(new SqlParameter("@instanceRefs", attributeValue1));
-                                }
-                                continue;
-                            }
-                            AlterTable(connection, tableName, columnName, "NVARCHAR(MAX)");
-                            columnNames.Add($"[{columnName}]"); //Columnas de otros atributos que no son id,contenido y id_father
-                            parameterNames.Add($"@{columnName}");
-                            string attributeValue = dataRow.XmlNode.Attributes[columnName]?.Value;
-                            attributeValue = attributeValue.Replace("'", "''");
-                            parameters.Add(new SqlParameter($"@{columnName}", attributeValue));
-
-                        }
-                        columnNames.Add("[contenido]");//Columna contenido
-                        parameterNames.Add("@contenido");
-                        parameters.Add(new SqlParameter("@contenido", dataRow.XmlNode.InnerText));
-
-                        if (!hasIdAttribute) //Columna de tablas sin id
-                        {
-                            columnNames.Add("[id_Father]");
-                            parameterNames.Add("@idFather");
-                            XmlNode parentNode = dataRow.XmlNode.ParentNode;
-                            string parentAttributeValue = parentNode?.Attributes["id"]?.Value;
-                            string parentAttributeId = parentAttributeValue?.Substring(2) ?? "0";
-                            parameters.Add(new SqlParameter("@idFather", parentAttributeId));
-                        }
-                        columnNames.Add("[idXml]"); // Agregar la columna idXml
-                        parameterNames.Add("@idXml");
-                        parameters.Add(new SqlParameter("@idXml", contadorXmls)); // Insertar el valor de contadorXmls
-
-                        insertQuery += string.Join(", ", columnNames) + ") VALUES (";
-                        insertQuery += string.Join(", ", parameterNames) + ");";
-
-                        using (SqlCommand command = new SqlCommand(insertQuery, connection))
-                        {
-                            command.Parameters.AddRange(parameters.ToArray());
-                            command.ExecuteNonQuery();
-                        }
-                    }
-                }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo InsertData {ea.Message}");
-            }
-
-        }
     }
 }
