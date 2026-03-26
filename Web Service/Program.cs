@@ -12,71 +12,166 @@ using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
 using static Web_Service.SqlToJsonConverter;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
+
+
+
 
 namespace Web_Service // Note: actual namespace depends on the project name.
 {
     internal class Program
     {
+        // MUTEX GLOBAL (single instance)
+        private const string GlobalMutexName = @"Global\DescarConector_WebService_SingleInstance";
+        private static Mutex? _singleInstanceMutex;
+        private static bool _mutexHeld;
+
+
         // Modelos para mapear los datos de SQL
 
         static async Task Main(string[] args)
         {
-            // 1) Validación de parámetros
-            if (args == null || args.Length < 4)
+            Mutex? singleInstanceMutex = null;
+            bool ownsMutex = false;
+
+            try
             {
-                Console.WriteLine("Uso:");
-                Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
-                Console.WriteLine("Ejemplo:");
-                Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
-                Environment.ExitCode = 1;
-                return;
+                // 0) MUTEX GLOBAL (una sola instancia en todo el SO)
+                // Nota: "Global\" puede requerir privilegios para crearse si lo corrés manual como usuario no-admin.
+                // En servicio (LocalSystem) normalmente no hay problema.
+                try
+                {
+                    // Crea o abre el mutex (si ya existe, createdNew=false, pero igual tenemos el handle)
+                    singleInstanceMutex = new Mutex(false, GlobalMutexName, out _);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // No pude crearlo (típico si existe con ACL restrictiva o falta privilegio).
+                    // Intento abrir el mutex existente:
+                    try
+                    {
+                        singleInstanceMutex = Mutex.OpenExisting(GlobalMutexName);
+                    }
+                    catch (Exception openEx)
+                    {
+                        Console.WriteLine($"No se pudo crear/abrir el mutex global '{GlobalMutexName}'. " +
+                                          $"Ejecutá como Administrador o corré solo vía servicio. Detalle: {openEx.Message}");
+                        Environment.ExitCode = 11;
+                        return;
+                    }
+                }
+
+                // Intento adquirirlo al instante (0 ms). Si no lo puedo adquirir, hay otra instancia corriendo.
+                try
+                {
+                    ownsMutex = singleInstanceMutex.WaitOne(0, false);
+                }
+                catch (AbandonedMutexException)
+                {
+                    // La instancia anterior murió sin liberar: se considera adquirido.
+                    ownsMutex = true;
+                }
+
+                if (!ownsMutex)
+                {
+                    Console.WriteLine("Ya existe otra instancia de Web_Service.exe ejecutándose. Esta instancia finalizará.");
+                    Environment.ExitCode = 10;
+                    return;
+                }
+
+                // 1) Validación de parámetros
+                if (args == null || args.Length < 4)
+                {
+                    Console.WriteLine("Uso:");
+                    Console.WriteLine("  Web_Service.exe <MBOM_Input> <MBOM_Procesada> <BOP_Input> <BOP_Procesada>");
+                    Console.WriteLine("Ejemplo:");
+                    Console.WriteLine(@"  Web_Service.exe ""C:\...\M-BOM_XXXX"" ""C:\...\M-BOM_XXXX\MBOM_Procesada"" ""C:\...\BOP_Pendientes"" ""C:\...\BOP_Procesadas""");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                string mbomInput = Path.GetFullPath(args[0]);
+                string mbomProcesada = Path.GetFullPath(args[1]);
+                string bopInput = Path.GetFullPath(args[2]);
+                string bopProcesada = Path.GetFullPath(args[3]);
+                Tabla_SB1.BopInputPath = bopInput;
+
+
+                Utilidades.InicializarLogPorMbom(mbomInput);
+                Utilidades.EscribirEnLog($"Inicio ScriptPrincipal (Mutex OK). MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
+
+                // 2) Validación/creación de carpetas (mínimo)
+                if (!Directory.Exists(mbomInput))
+                {
+                    Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
+                    Environment.ExitCode = 2;
+                    return;
+                }
+                if (!Directory.Exists(bopInput))
+                {
+                    Console.WriteLine($"No existe BOP_Input: {bopInput}");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+
+                Directory.CreateDirectory(mbomProcesada);
+                Directory.CreateDirectory(bopProcesada);
+
+                // 3) ConnectionString
+                //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
+                string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
+
+                // 4) Procesar MBOM
+                await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
+
+                // 5) Limpiar BD ANTES de BOP
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    BorrarTabla(conn, new Dictionary<string, TableBucket>());
+                }
+
+                // 6) Procesar BOP
+                await ProcesarBOP(connectionString, bopInput, bopProcesada);
+
+                Environment.ExitCode = 0;
             }
-
-            string mbomInput = Path.GetFullPath(args[0]);
-            string mbomProcesada = Path.GetFullPath(args[1]);
-            string bopInput = Path.GetFullPath(args[2]);
-            string bopProcesada = Path.GetFullPath(args[3]);
-
-            Utilidades.InicializarLogPorMbom(mbomInput);
-            Utilidades.EscribirEnLog($"Inicio ScriptPrincipal. MBOM_INPUT={mbomInput} | MBOM_Procesada={mbomProcesada} | BOP_INPUT={bopInput} | BOP_Procesada={bopProcesada}");
-
-
-            // 2) Validación/creación de carpetas (mínimo)
-            if (!Directory.Exists(mbomInput))
+            catch (Exception ex)
             {
-                Console.WriteLine($"No existe MBOM_Input: {mbomInput}");
-                Environment.ExitCode = 2;
-                return;
+                // Si ya inicializaste log por MBOM, esto quedará registrado
+                try { Utilidades.EscribirEnLog($"[FATAL] Excepción no controlada en Main: {ex}"); } catch { }
+                Console.WriteLine(ex.ToString());
+                Environment.ExitCode = 99;
             }
-            if (!Directory.Exists(bopInput))
+            finally
             {
-                Console.WriteLine($"No existe BOP_Input: {bopInput}");
-                Environment.ExitCode = 3;
-                return;
+                // Liberar mutex SOLO si lo adquirimos
+                if (singleInstanceMutex != null)
+                {
+                    if (ownsMutex)
+                    {
+                        try { singleInstanceMutex.ReleaseMutex(); } catch { /* noop */ }
+                    }
+                    singleInstanceMutex.Dispose();
+                }
             }
-
-            // Estas dos normalmente las crea el monitor, pero las garantizamos igual:
-            Directory.CreateDirectory(mbomProcesada);
-            Directory.CreateDirectory(bopProcesada);
-
-            // 3) ConnectionString (igual que hoy)
-            //string connectionString = "Server=10.0.0.82;Database=AgrometalBOP;User Id=sa;Password=Descar_2020;";
-            string connectionString = "Server=SRV-TEAMCENTER;Database=MBOM-BOP_Agrometal;User Id=infodba;Password=infodba;";
-            // 4) Procesar MBOM con rutas dinámicas
-            await ProcesarMBOM(connectionString, mbomInput, mbomProcesada);
-
-            // 5) Limpiar BD ANTES de BOP (igual que hoy)
-            using (SqlConnection conn = new SqlConnection(connectionString))
-            {
-                conn.Open();
-                BorrarTabla(conn, new Dictionary<string, TableBucket>());
-            }
-
-            // 6) Procesar BOP con rutas dinámicas
-            await ProcesarBOP(connectionString, bopInput, bopProcesada);
         }
 
 
+
+        static string? NormalizarRef(string? v)
+        {
+            if (string.IsNullOrWhiteSpace(v)) return null;
+
+            // Casos típicos en PLMXML
+            if (v.StartsWith("#id", StringComparison.OrdinalIgnoreCase)) return v.Substring(3);
+            if (v.StartsWith("id", StringComparison.OrdinalIgnoreCase)) return v.Substring(2);
+            if (v.StartsWith("#", StringComparison.OrdinalIgnoreCase)) return v.Substring(1);
+
+            return v;
+        }
         public class TableBucket
         {
             public string TableName { get; set; } = string.Empty;
@@ -91,7 +186,6 @@ namespace Web_Service // Note: actual namespace depends on the project name.
             public List<XmlNode> Nodes { get; } = new List<XmlNode>();
         }
         private static async Task ProcesarBOP(string connectionString, string carpetaInput, string carpetaProcesados)
-
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO BOP ===");
 
@@ -233,10 +327,6 @@ ORDER BY
 
             Sg1Exclusions.Clear();
             var converter = new SqlToJsonConverter(connectionString);
-            XmlDocument xmlDoc = new XmlDocument();
-
-            //string carpetaInput = @"E:\a\Rodrigo Bertero\Prueba";
-            //string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalBOP";
 
             if (!Directory.Exists(carpetaInput))
             {
@@ -245,121 +335,324 @@ ORDER BY
             }
             Directory.CreateDirectory(carpetaProcesados);
 
-            string[] archivos = Directory.GetFiles(carpetaInput);
+            var archivos = Directory.EnumerateFiles(carpetaInput)
+    .Where(f =>
+    {
+        var ext = Path.GetExtension(f);
+        return ext.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase);
+    })
+    .ToArray();
+
             int contadorXmls = 1;
-            
+
+            // --- helper local: carga XML en SQL sin cargar todo en RAM ---
+            static void CargarXmlEnSqlStreaming(SqlConnection connection, string xmlPath, int idXml)
+            {
+                var ignorados = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplicationRef","AttributeContext","RevisionRule","Site","Transform","View"
+        };
+
+                var createdTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var knownCols = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+                void EnsureTable(string tableName, bool hasIdAttr)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (createdTables.Contains(tableName))
+                        return;
+
+                    string sql =
+                        $"IF OBJECT_ID(N'[{tableName}]', 'U') IS NULL " +
+                        $"BEGIN " +
+                        $"CREATE TABLE [{tableName}] (" +
+                        $"id INT IDENTITY(1,1) PRIMARY KEY, " +
+                        $"contenido NVARCHAR(MAX), " +
+                        $"id_Table NVARCHAR(MAX) NULL, " +
+                        $"id_Father NVARCHAR(MAX) NULL, " +
+                        $"idXml INT" +
+                        $"); " +
+                        $"END;";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    createdTables.Add(tableName);
+
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "contenido", "id_Table", "id_Father", "idXml"
+};
+                    knownCols[tableName] = cols;
+                }
+
+                void EnsureColumn(string tableName, string columnName)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (!knownCols.TryGetValue(tableName, out var cols))
+                    {
+                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        knownCols[tableName] = cols;
+                    }
+
+                    if (cols.Contains(columnName))
+                        return;
+
+                    string sql =
+                        $"IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
+                        $"ALTER TABLE [{tableName}] ADD [{columnName}] NVARCHAR(MAX);";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    cols.Add(columnName);
+                }
+
+                var settings = new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Ignore,
+                    IgnoreComments = true,
+                    IgnoreProcessingInstructions = true,
+                    IgnoreWhitespace = true
+                };
+
+                var nameStack = new Stack<string>();
+                var idStack = new Stack<string>();
+
+                nameStack.Push(string.Empty);
+                idStack.Push(""); // raíz => sin id (NULL en DB)
+
+                using var fs = File.OpenRead(xmlPath);
+                using var reader = XmlReader.Create(fs, settings);
+
+                while (reader.Read())
+                {
+                    if (reader.NodeType == XmlNodeType.Element)
+                    {
+                        string nodeName = reader.Name;
+
+                        // ignorados: en tu ParseNode no recursaba, así que acá skipeamos el sub-árbol
+                        if (ignorados.Contains(nodeName))
+                        {
+                            reader.Skip();
+                            continue;
+                        }
+
+                        string parentName = nameStack.Count > 0 ? nameStack.Peek() : string.Empty;
+
+                        // atributos
+                        var attrList = new List<(string Name, string Value)>();
+                        bool hasIdAttr = false;
+                        string idValueForStack = ""; // si el nodo no tiene id => NULL
+
+                        if (reader.HasAttributes)
+                        {
+                            while (reader.MoveToNextAttribute())
+                            {
+                                var an = reader.Name;
+                                var av = reader.Value ?? string.Empty;
+                                attrList.Add((an, av));
+
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    hasIdAttr = true;
+                                    if (!string.IsNullOrEmpty(av) && av.Length > 2)
+                                        idValueForStack = av.Substring(2);
+                                }
+                            }
+                            reader.MoveToElement();
+                        }
+
+                        // tabla (misma lógica que GetTableName)
+                        string tableName = nodeName;
+                        if (!hasIdAttr && !string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                            tableName = $"{nodeName}_{parentName}";
+
+                        bool isEmpty = reader.IsEmptyElement;
+
+                        // PLMXML: no insertás fila, pero sí afecta parentNodeName para hijos (como antes)
+                        if (!string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        {
+                            EnsureTable(tableName, hasIdAttr);
+
+                            // columnas base para el insert
+                            var colNames = new List<string>();
+                            var paramNames = new List<string>();
+                            var sqlParams = new List<SqlParameter>();
+                            int p = 0;
+
+                            // contenido (vacío para ahorrar RAM)
+                            colNames.Add("[contenido]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", ""));
+                            p++;
+
+                            // id_Table / id_Father
+                            // id_Table (NULL si el nodo no tiene id)
+                            EnsureColumn(tableName, "id_Table");
+                            colNames.Add("[id_Table]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(idValueForStack) ? (object)DBNull.Value : idValueForStack));
+                            p++;
+
+                            // id_Father (NULL si no hay id del padre)
+                            EnsureColumn(tableName, "id_Father");
+                            colNames.Add("[id_Father]");
+                            paramNames.Add($"@p{p}");
+                            string parentId = idStack.Count > 0 ? idStack.Peek() : "";
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(parentId) ? (object)DBNull.Value : parentId));
+                            p++;
+
+
+                            // atributos => columnas (respetando tu lógica de recortes)
+                            foreach (var (an, avRaw) in attrList)
+                            {
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                string? normalized = null;
+
+                                bool esRef =
+                                        an.Equals("instancedRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("masterRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("parentRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("instanceRefs", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("revisionRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("partRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("unitRef", StringComparison.OrdinalIgnoreCase);
+
+                                normalized = esRef ? (NormalizarRef(avRaw) ?? "") : avRaw;
+
+                                EnsureColumn(tableName, an);
+                                colNames.Add($"[{an}]");
+                                paramNames.Add($"@p{p}");
+                                sqlParams.Add(new SqlParameter($"@p{p}", normalized ?? ""));
+                                p++;
+                            }
+
+                            // idXml
+                            colNames.Add("[idXml]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", idXml));
+                            p++;
+
+                            string insertSql =
+                                $"INSERT INTO [{tableName}] ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", paramNames)});";
+
+                            using (var cmd = new SqlCommand(insertSql, connection))
+                            {
+                                cmd.Parameters.AddRange(sqlParams.ToArray());
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+
+                        // stack push/pop para mantener parentNodeName e id_Father igual que antes
+                        if (!isEmpty)
+                        {
+                            nameStack.Push(nodeName);
+                            idStack.Push(idValueForStack);
+                        }
+                    }
+                    else if (reader.NodeType == XmlNodeType.EndElement)
+                    {
+                        if (nameStack.Count > 1) nameStack.Pop();
+                        if (idStack.Count > 1) idStack.Pop();
+                    }
+                }
+            }
 
             foreach (string archivo in archivos)
             {
-                bool borrarTablas = true;
+                Sg1Exclusions.Clear();
+
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando BOP: {Path.GetFileName(archivo)}");
-                    xmlDoc.Load(archivo);
 
                     using (SqlConnection connection = new SqlConnection(connectionString))
                     {
                         connection.Open();
-                        //var groupedDataRows = new Dictionary<string, List<DataRow>>();
-                        XmlNode root = xmlDoc.DocumentElement;
-                        var groupedDataRows = new Dictionary<string, TableBucket>();
+                        Tabla_SB1.EnsureTablasOpcionalesSB1(connection);
 
-                        if (ParseNode(root, groupedDataRows))
-                        {
-                           
-                            //Console.ReadLine();
-                            if (borrarTablas)
-                            {
-                                //Console.WriteLine("Presione ENTER para borrar tablas...");
-                                BorrarTabla(connection, groupedDataRows);
-                                borrarTablas = false;
-                            }
+                        // Mantener tu comportamiento: borrar y recrear por XML
+                        BorrarTabla(connection, new Dictionary<string, TableBucket>());
 
-                            CreateTable(connection, groupedDataRows);
-                            InsertData(connection, groupedDataRows, archivo, contadorXmls);
-                            // Mover procesado
-                            string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
-                            if (File.Exists(destino))
-                            {
-                                string baseName = Path.GetFileNameWithoutExtension(destino);
-                                string ext = Path.GetExtension(destino);
-                                destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
-                            }
-                            File.Move(archivo, destino);
-                            contadorXmls++;
-                            // SB1 (productos de la BOP)
-                            Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
-                            var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
-                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
+                        // Cargar XML a SQL sin cargar todo en memoria
+                        CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
+                    }
+                    Tabla_SB1.BopInputPath = carpetaInput;
+                    Tabla_SB1.BopProcesadaPath = carpetaProcesados;
+                    Tabla_SB1.CurrentBopCode = Path.GetFileNameWithoutExtension(archivo);
 
-                            foreach (string s in listaSB1_BOP)
-                            {
-                                Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
-                                await Tabla_SB1.postSB1(s);
-                            }
+                    // Mover procesado (igual que antes)
+                    string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
+                    if (File.Exists(destino))
+                    {
+                        string baseName = Path.GetFileNameWithoutExtension(destino);
+                        string ext = Path.GetExtension(destino);
+                        destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+                    }
+                    File.Move(archivo, destino);
+                    contadorXmls++;
 
-                            // SG1 (estructuras de la BOP)
-                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
-                            var estructurasMBOM = Tabla_SG1.jsonSG1_BOP();
-                            //Console.WriteLine(estructurasMBOM);
-                            Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
-
-                            await Tabla_SG1.postSG1(estructurasMBOM);
-                            Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
-
-
-
-                            // SG2/SH3 (procesos)
-                            Console.WriteLine("[BOP] Generando SG2/SH3 (Procesos Productivos) desde BOP...");
-                            var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
-                            foreach (string s in listaSG2)
-                            {
-                                await Tablas_SG2_SH3.EnviarSG2_SH3(s);
-
-                                //Console.WriteLine(s);
-                                Utilidades.EscribirEnLog(s);
-                            }
-
-
-                            // Mostrar la estructura
-                            //Console.WriteLine("=============================");
-                            //converter.ShowBOMTree(sqlQuery);
-
-                            // JSONs jerárquicos
-                            Console.WriteLine("\n============================");
-                            //converter.ProcessHierarchicalJsons(sqlQuery);
-
-                            var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
-                            //Console.WriteLine($"Se generaron {jsonStrings.Count} JSONs jerárquicos");
-
-                            for (int i = 0; i < jsonStrings.Count; i++)
-                            {
-                                //Console.WriteLine($"\nJSON #{i + 1}:");
-                                //Console.WriteLine(jsonStrings[i]);
-                            }
-
-
-                        }
+                    // SB1 (productos de la BOP)
+                    Console.WriteLine("[MBOM] Generando SB1 (productos) desde estructura BOP...");
+                    var listaSB1_BOP = Tabla_SB1.jsonSB1_BOP();
+                    Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_BOP.Count} productos.");
+                    foreach (string s in listaSB1_BOP)
+                    {
+                        Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                        await Tabla_SB1.postSB1(s);
                     }
 
-                    Utilidades.EscribirEnLog($"BOP Procesado: {Path.GetFileName(archivo)}");
+                    // SG1 (estructuras de la BOP)
+                    Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde BOP...");
+                    var estructurasMBOM = Tabla_SG1.jsonSG1_BOP();
+                    Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+                    await Tabla_SG1.postSG1(estructurasMBOM);
+                    Console.WriteLine("[MBOM] Envío SG1 (BOP) terminado.");
+
+                    // SG2/SH3 (procesos)
+                    Console.WriteLine("[BOP] Generando SG2/SH3 (Procesos Productivos) desde BOP...");
+                    var listaSG2 = Tablas_SG2_SH3.jsonSG2_SH3();
+                    foreach (string s in listaSG2)
+                    {
+                        await Tablas_SG2_SH3.EnviarSG2_SH3(s);
+                        Utilidades.EscribirJSONEnLog(s);
+                    }
+
+                    // JSONs jerárquicos (igual que antes)
+                    Console.WriteLine("\n============================");
+                    try
+                    {
+                        //var jsonStrings = converter.ConvertToHierarchicalJsonStrings(sqlQuery);
+                    }
+                    catch (Exception exConv)
+                    {
+                        //Utilidades.EscribirEnLog($"[BOP][WARN] Falló ConvertToHierarchicalJsonStrings: {exConv.Message}\n{exConv}");
+                    }
+
+                    Utilidades.EscribirEnLog($"BOP Procesado: {Path.GetFileName(destino)}");
                 }
                 catch (Exception ea)
                 {
-                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\nError: {ea.Message}");
+                    Utilidades.EscribirEnLog($"Error BOP: {Path.GetFileName(archivo)}\n{ea}");
                 }
             }
         }
 
         private static async Task ProcesarMBOM(string connectionString, string carpetaInput, string carpetaProcesados)
-
         {
             Console.WriteLine("=== INICIANDO PROCESAMIENTO MBOM ===");
-
-            XmlDocument xmlDoc = new XmlDocument();
-
-            //string carpetaInput = @"E:\a\Rodrigo Bertero\MBOM_input";
-            //string carpetaProcesados = @"E:\a\Rodrigo Bertero\ProcesadosAgrometalMBOM";
 
             if (!Directory.Exists(carpetaInput))
             {
@@ -368,77 +661,282 @@ ORDER BY
             }
             Directory.CreateDirectory(carpetaProcesados);
 
+            var archivos = Directory.EnumerateFiles(carpetaInput)
+    .Where(f =>
+    {
+        var ext = Path.GetExtension(f);
+        return ext.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".plmxml", StringComparison.OrdinalIgnoreCase);
+    })
+    .ToArray();
 
-            string[] archivos = Directory.GetFiles(carpetaInput);
             int contadorXmls = 1;
-            
+
+            // --- helper local: carga XML en SQL sin cargar todo en RAM ---
+            static void CargarXmlEnSqlStreaming(SqlConnection connection, string xmlPath, int idXml)
+            {
+                var ignorados = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplicationRef","AttributeContext","RevisionRule","Site","Transform","View"
+        };
+
+                var createdTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var knownCols = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+                void EnsureTable(string tableName, bool hasIdAttr)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (createdTables.Contains(tableName))
+                        return;
+
+                    string sql =
+                        $"IF OBJECT_ID(N'[{tableName}]', 'U') IS NULL " +
+                        $"BEGIN " +
+                        $"CREATE TABLE [{tableName}] (" +
+                        $"id INT IDENTITY(1,1) PRIMARY KEY, " +
+                        $"contenido NVARCHAR(MAX), " +
+                        $"id_Table NVARCHAR(MAX) NULL, " +
+                        $"id_Father NVARCHAR(MAX) NULL, " +
+                        $"idXml INT" +
+                        $"); " +
+                        $"END;";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    createdTables.Add(tableName);
+
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "contenido", "id_Table", "id_Father", "idXml"
+};
+                    knownCols[tableName] = cols;
+                }
+
+                void EnsureColumn(string tableName, string columnName)
+                {
+                    if (string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    if (!knownCols.TryGetValue(tableName, out var cols))
+                    {
+                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        knownCols[tableName] = cols;
+                    }
+
+                    if (cols.Contains(columnName))
+                        return;
+
+                    string sql =
+                        $"IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
+                        $"ALTER TABLE [{tableName}] ADD [{columnName}] NVARCHAR(MAX);";
+
+                    using (var cmd = new SqlCommand(sql, connection))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    cols.Add(columnName);
+                }
+
+                var settings = new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Ignore,
+                    IgnoreComments = true,
+                    IgnoreProcessingInstructions = true,
+                    IgnoreWhitespace = true
+                };
+
+                var nameStack = new Stack<string>();
+                var idStack = new Stack<string>();
+                nameStack.Push(string.Empty);
+                idStack.Push("");
+
+                using var fs = File.OpenRead(xmlPath);
+                using var reader = XmlReader.Create(fs, settings);
+
+                while (reader.Read())
+                {
+                    if (reader.NodeType == XmlNodeType.Element)
+                    {
+                        string nodeName = reader.Name;
+
+                        if (ignorados.Contains(nodeName))
+                        {
+                            reader.Skip();
+                            continue;
+                        }
+
+                        string parentName = nameStack.Count > 0 ? nameStack.Peek() : string.Empty;
+
+                        var attrList = new List<(string Name, string Value)>();
+                        bool hasIdAttr = false;
+                        string idValueForStack = "";
+
+                        if (reader.HasAttributes)
+                        {
+                            while (reader.MoveToNextAttribute())
+                            {
+                                var an = reader.Name;
+                                var av = reader.Value ?? string.Empty;
+                                attrList.Add((an, av));
+
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    hasIdAttr = true;
+                                    if (!string.IsNullOrEmpty(av) && av.Length > 2)
+                                        idValueForStack = av.Substring(2);
+                                }
+                            }
+                            reader.MoveToElement();
+                        }
+
+                        string tableName = nodeName;
+                        if (!hasIdAttr && !string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                            tableName = $"{nodeName}_{parentName}";
+
+                        bool isEmpty = reader.IsEmptyElement;
+
+                        if (!string.Equals(tableName, "PLMXML", StringComparison.OrdinalIgnoreCase))
+                        {
+                            EnsureTable(tableName, hasIdAttr);
+
+                            var colNames = new List<string>();
+                            var paramNames = new List<string>();
+                            var sqlParams = new List<SqlParameter>();
+                            int p = 0;
+
+                            colNames.Add("[contenido]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", ""));
+                            p++;
+
+                            // id_Table (NULL si el nodo no tiene id)
+                            EnsureColumn(tableName, "id_Table");
+                            colNames.Add("[id_Table]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(idValueForStack) ? (object)DBNull.Value : idValueForStack));
+                            p++;
+
+                            // id_Father (NULL si no hay id del padre)
+                            EnsureColumn(tableName, "id_Father");
+                            colNames.Add("[id_Father]");
+                            paramNames.Add($"@p{p}");
+                            string parentId = idStack.Count > 0 ? idStack.Peek() : "";
+                            sqlParams.Add(new SqlParameter($"@p{p}", string.IsNullOrEmpty(parentId) ? (object)DBNull.Value : parentId));
+                            p++;
+
+
+                            foreach (var (an, avRaw) in attrList)
+                            {
+                                if (string.Equals(an, "id", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                string? normalized = null;
+
+                                bool esRef =
+                                        an.Equals("instancedRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("masterRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("parentRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("instanceRefs", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("revisionRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("partRef", StringComparison.OrdinalIgnoreCase) ||
+                                        an.Equals("unitRef", StringComparison.OrdinalIgnoreCase);
+
+                                normalized = esRef ? (NormalizarRef(avRaw) ?? "") : avRaw;
+
+                                EnsureColumn(tableName, an);
+                                colNames.Add($"[{an}]");
+                                paramNames.Add($"@p{p}");
+                                sqlParams.Add(new SqlParameter($"@p{p}", normalized ?? ""));
+                                p++;
+                            }
+
+                            colNames.Add("[idXml]");
+                            paramNames.Add($"@p{p}");
+                            sqlParams.Add(new SqlParameter($"@p{p}", idXml));
+                            p++;
+
+                            string insertSql =
+                                $"INSERT INTO [{tableName}] ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", paramNames)});";
+
+                            using (var cmd = new SqlCommand(insertSql, connection))
+                            {
+                                cmd.Parameters.AddRange(sqlParams.ToArray());
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+
+                        if (!isEmpty)
+                        {
+                            nameStack.Push(nodeName);
+                            idStack.Push(idValueForStack);
+                        }
+                    }
+                    else if (reader.NodeType == XmlNodeType.EndElement)
+                    {
+                        if (nameStack.Count > 1) nameStack.Pop();
+                        if (idStack.Count > 1) idStack.Pop();
+                    }
+                }
+            }
 
             foreach (string archivo in archivos)
             {
-                bool borrarTablas = true;
                 try
                 {
                     Console.WriteLine($"[INFO] Procesando MBOM: {Path.GetFileName(archivo)}");
-                    xmlDoc.Load(archivo);
 
                     using (SqlConnection connection = new SqlConnection(connectionString))
                     {
                         connection.Open();
-                        XmlNode root = xmlDoc.DocumentElement;
-                        var groupedDataRows = new Dictionary<string, TableBucket>();
+                        Tabla_SB1.EnsureTablasOpcionalesSB1(connection);
+                        // Mantener tu comportamiento: borrar y recrear por XML
+                        BorrarTabla(connection, new Dictionary<string, TableBucket>());
 
-                        if (ParseNode(root, groupedDataRows))
+                        // Cargar XML a SQL sin cargar todo en memoria
+                        CargarXmlEnSqlStreaming(connection, archivo, contadorXmls);
+
+                        Console.WriteLine("[MBOM] Generando SB1...");
+                        HashSet<string> codigosFantasma;
+                        Console.WriteLine("[MBOM] Generando SB1...");
+                        var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM(out codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos. Fantasmas={codigosFantasma.Count}");
+
+                        foreach (string s in listaSB1_MBOM)
                         {
-                            //Console.WriteLine("Presione ENTER para borrar tablas...");
-                            //Console.ReadLine();
-                            if (borrarTablas)
-                            {
-                                BorrarTabla(connection, groupedDataRows);
-                                borrarTablas = false;
-                                Console.WriteLine("Borrando tablas");
-                            }
-
-                            CreateTable(connection, groupedDataRows);
-                            Console.WriteLine("Creando tablas");
-                            InsertData(connection, groupedDataRows, archivo, contadorXmls);
-
-                            Console.WriteLine("[MBOM] Generando SB1...");
-                            var listaSB1_MBOM = Tabla_SB1.jsonSB1_MBOM();
-                            Console.WriteLine($"[MBOM] jsonSB1() devolvió {listaSB1_MBOM.Count} productos.");
-                            //Console.WriteLine("Presione ENTER para finalizar SB1...");
-                            //Console.ReadLine();
-
-                            foreach (string s in listaSB1_MBOM)
-                            {
-                                Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
-                                await Tabla_SB1.postSB1(s);
-                            }
-
-                            // --- ESTRUCTURAS TABLA SG1 
-                            Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM...");
-                            var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM();
-                            Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
-                            //Console.WriteLine($"[JSON MBOM] {estructurasMBOM}");
-
-                            await Tabla_SG1.postSG1(estructurasMBOM);
-                            Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
-                            //Console.WriteLine("Presione ENTER para finalizar SG1...");
-                            //Console.ReadLine();
-
-                            // Mover procesado
-                            string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
-                            if (File.Exists(destino))
-                            {
-                                string baseName = Path.GetFileNameWithoutExtension(destino);
-                                string ext = Path.GetExtension(destino);
-                                destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
-                            }
-                            File.Move(archivo, destino);
-                            contadorXmls++;
+                            Console.WriteLine("[MBOM] Enviando producto SB1 a Totvs...");
+                            await Tabla_SB1.postSB1(s);
                         }
+
+                        Console.WriteLine("[MBOM] Generando SG1 (estructuras) desde MBOM (solo fantasmas)...");
+                        var estructurasMBOM = Tabla_SG1.jsonSG1_MBOM(codigosFantasma);
+                        Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre (fantasma).");
+
+                        await Tabla_SG1.postSG1(estructurasMBOM);
+                        Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
+
+                        Console.WriteLine($"[MBOM] jsonSG1() devolvió estructuras para {estructurasMBOM.Count} productos padre.");
+                        await Tabla_SG1.postSG1(estructurasMBOM);
+                        Console.WriteLine("[MBOM] Envío SG1 (MBOM) terminado.");
                     }
 
-                    Utilidades.EscribirEnLog($"MBOM Procesado: {Path.GetFileName(archivo)}");
+                    // Mover procesado (igual que antes)
+                    string destino = Path.Combine(carpetaProcesados, Path.GetFileName(archivo));
+                    if (File.Exists(destino))
+                    {
+                        string baseName = Path.GetFileNameWithoutExtension(destino);
+                        string ext = Path.GetExtension(destino);
+                        destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+                    }
+                    File.Move(archivo, destino);
+                    contadorXmls++;
+
+                    Utilidades.EscribirEnLog($"MBOM Procesado: {Path.GetFileName(destino)}");
                 }
                 catch (Exception ea)
                 {
@@ -446,6 +944,7 @@ ORDER BY
                 }
             }
         }
+
 
 
 
@@ -510,271 +1009,13 @@ ORDER BY
             }
         }
 
+        private static readonly HashSet<string> NodosIgnorados = new(StringComparer.OrdinalIgnoreCase)
+{
+    "ApplicationRef", "AttributeContext",
+    "RevisionRule", "Site", "Transform", "View"
+};
+
         
-        static bool ParseNode(XmlNode node, Dictionary<string, TableBucket> groupedDataRows, string parentNodeName = "")
-        {
-            var listaIgnorados = new List<string> {
-        "ApplicationRef", "AttributeContext",
-        "RevisionRule", "Site", "Transform", "View"
-    };
-
-            try
-            {
-                if (node.NodeType == XmlNodeType.Element && !listaIgnorados.Contains(node.Name))
-                {
-                    string nodeName = node.Name;
-                    //Console.WriteLine($"Parseando nodo: {nodeName}");
-
-                    // Obtener nombre de tabla
-                    var atributosDelNodo = new List<string>();
-                    foreach (XmlAttribute attribute in node.Attributes)
-                    {
-                        atributosDelNodo.Add(attribute.Name);
-                    }
-
-                    string tableName = GetTableName(nodeName, atributosDelNodo, parentNodeName);
-
-                    // Buscar/crear bucket para esta tabla
-                    if (!groupedDataRows.TryGetValue(tableName, out var bucket))
-                    {
-                        bucket = new TableBucket { TableName = tableName };
-                        groupedDataRows[tableName] = bucket;
-                    }
-
-                    // Actualizar atributos conocidos y HasIdAttribute
-                    foreach (var attrName in atributosDelNodo)
-                    {
-                        bucket.Attributes.Add(attrName);
-                        if (attrName == "id")
-                            bucket.HasIdAttribute = true;
-                    }
-
-                    // Guardar el nodo para insertarlo luego
-                    bucket.Nodes.Add(node);
-
-                    // Recursividad
-                    foreach (XmlNode childNode in node.ChildNodes)
-                    {
-                        //Console.WriteLine($"    -> Nodo hijo de {nodeName}: {childNode.Name}");
-                        ParseNode(childNode, groupedDataRows, nodeName);
-                    }
-
-                    return true;
-                }
-                return false;
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog("Excepcion controlada en el metodo ParseNode: " + ea.Message);
-                return false;
-            }
-        }
-        static string GetTableName(string nodeName, List<string> attributes, string parentNodeName)
-        {
-            string tableName = nodeName;
-            if (!attributes.Contains("id") && tableName != "PLMXML") //Si no tiene el atributo id y no es el nodo PLMXML
-            {
-
-                tableName = $"{nodeName}_{parentNodeName}";
-            }
-            return tableName;
-        }
-        static void CreateTable(SqlConnection connection, Dictionary<string, TableBucket> groupedDataRows)
-        {
-            try
-            {
-                foreach (var kvp in groupedDataRows)
-                {
-                    var bucket = kvp.Value;
-                    string tableName = bucket.TableName;
-
-                    if (tableName == "PLMXML")
-                        continue;
-
-                    string createTableQuery =
-                        $"IF OBJECT_ID('[{tableName}]', 'U') IS NULL " +
-                        $"CREATE TABLE [{tableName}] (" +
-                        "id INT IDENTITY(1,1) PRIMARY KEY, " +
-                        "contenido NVARCHAR(MAX)";
-
-                    // id_Table vs id_Father
-                    if (bucket.HasIdAttribute)
-                    {
-                        createTableQuery += ", id_Table NVARCHAR(MAX)";
-                    }
-                    else
-                    {
-                        createTableQuery += ", id_Father NVARCHAR(MAX)";
-                    }
-
-                    // columnas adicionales
-                    foreach (string columnName in bucket.Attributes)
-                    {
-                        if (columnName == "id") continue;  // ya la representamos con id_Table/id_Father
-                        createTableQuery += $", [{columnName}] NVARCHAR(MAX)";
-                    }
-
-                    createTableQuery += ", idXml INT);";
-
-                    using (SqlCommand command = new SqlCommand(createTableQuery, connection))
-                    {
-                        command.ExecuteNonQuery();
-                    }
-                }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo createTable: {ea.Message}");
-                throw;
-            }
-        }
-
-        static void AlterTable(SqlConnection connection, string tableName, string columnName, string columnType)
-        {
-            try
-            {
-                string alterTableQuery = $"IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{tableName}' AND COLUMN_NAME = '{columnName}') " +
-                $"ALTER TABLE [{tableName}] ADD [{columnName}] {columnType};";
-
-                using (SqlCommand command = new SqlCommand(alterTableQuery, connection))
-                {
-                    command.ExecuteNonQuery();
-                }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo AlterTable: {ea.Message}");
-                throw;
-            }
-
-        }
-
-        static void InsertData(SqlConnection connection, Dictionary<string, TableBucket> tables, string xml, int contadorXmls)
-        {
-            try
-            {
-                foreach (var kvp in tables)
-                {
-                    string tableName = kvp.Key;
-                    var bucket = kvp.Value;
-
-                    foreach (XmlNode node in bucket.Nodes)
-                    {
-                        if (node.Name == "PLMXML") // Saltar nodo raíz
-                            continue;
-
-                        string insertQuery = $"INSERT INTO [{tableName}] (";
-                        List<string> columnNames = new List<string>();
-                        List<string> parameterNames = new List<string>();
-                        List<SqlParameter> parameters = new List<SqlParameter>();
-                        bool hasIdAttribute = false;
-
-                        // Atributos del nodo
-                        foreach (XmlAttribute attr in node.Attributes)
-                        {
-                            string columnName = attr.Name;
-                            string attributeValue1 = attr.Value;
-
-                            if (columnName == "id" || columnName == "instancedRef" ||
-                                columnName == "masterRef" || columnName == "parentRef" ||
-                                columnName == "instanceRefs")
-                            {
-                                if (string.IsNullOrEmpty(attributeValue1) || attributeValue1.Length <= 2)
-                                    continue;
-
-                                switch (columnName)
-                                {
-                                    case "id":
-                                        hasIdAttribute = true;
-                                        columnNames.Add("[id_Table]");
-                                        parameterNames.Add("@id");
-                                        attributeValue1 = attributeValue1.Substring(2);
-                                        parameters.Add(new SqlParameter("@id", attributeValue1));
-                                        break;
-
-                                    case "instancedRef":
-                                        columnNames.Add("[instancedRef]");
-                                        parameterNames.Add("@instancedRef");
-                                        attributeValue1 = attributeValue1.Substring(3);
-                                        parameters.Add(new SqlParameter("@instancedRef", attributeValue1));
-                                        break;
-
-                                    case "masterRef":
-                                        columnNames.Add("[masterRef]");
-                                        parameterNames.Add("@masterRef");
-                                        attributeValue1 = attributeValue1.Substring(3);
-                                        parameters.Add(new SqlParameter("@masterRef", attributeValue1));
-                                        break;
-
-                                    case "parentRef":
-                                        columnNames.Add("[parentRef]");
-                                        parameterNames.Add("@parentRef");
-                                        attributeValue1 = attributeValue1.Substring(3);
-                                        parameters.Add(new SqlParameter("@parentRef", attributeValue1));
-                                        break;
-
-                                    case "instanceRefs":
-                                        columnNames.Add("[instanceRefs]");
-                                        parameterNames.Add("@instanceRefs");
-                                        attributeValue1 = attributeValue1.Substring(3);
-                                        parameters.Add(new SqlParameter("@instanceRefs", attributeValue1));
-                                        break;
-                                }
-
-                                continue;
-                            }
-
-                            // Otros atributos
-                            AlterTable(connection, tableName, columnName, "NVARCHAR(MAX)");
-
-                            columnNames.Add($"[{columnName}]");
-                            parameterNames.Add($"@{columnName}");
-
-                            string attributeValue = attr.Value?.Replace("'", "''") ?? string.Empty;
-                            parameters.Add(new SqlParameter($"@{columnName}", attributeValue));
-                        }
-
-                        // contenido
-                        columnNames.Add("[contenido]");
-                        parameterNames.Add("@contenido");
-                        parameters.Add(new SqlParameter("@contenido", node.InnerText));
-
-                        // id_Father si no hubo id en este nodo (misma lógica que antes)
-                        if (!hasIdAttribute)
-                        {
-                            columnNames.Add("[id_Father]");
-                            parameterNames.Add("@idFather");
-
-                            XmlNode parentNode = node.ParentNode;
-                            string parentAttributeValue = parentNode?.Attributes?["id"]?.Value;
-                            string parentAttributeId = parentAttributeValue != null && parentAttributeValue.Length > 2
-                                    ? parentAttributeValue.Substring(2)
-                                    : "0";
-
-                            parameters.Add(new SqlParameter("@idFather", parentAttributeId));
-                        }
-
-                        // idXml
-                        columnNames.Add("[idXml]");
-                        parameterNames.Add("@idXml");
-                        parameters.Add(new SqlParameter("@idXml", contadorXmls));
-
-                        insertQuery += string.Join(", ", columnNames) + ") VALUES (";
-                        insertQuery += string.Join(", ", parameterNames) + ");";
-
-                        using (SqlCommand command = new SqlCommand(insertQuery, connection))
-                        {
-                            command.Parameters.AddRange(parameters.ToArray());
-                            command.ExecuteNonQuery();
-                        }
-                    }
-                }
-            }
-            catch (Exception ea)
-            {
-                Utilidades.EscribirEnLog($"Excepcion controlada en el metodo InsertData {ea.Message}");
-            }
-        }
 
     }
 }

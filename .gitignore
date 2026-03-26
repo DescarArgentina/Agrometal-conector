@@ -8,4 +8,9 @@ bin/
 obj/
 
 # Otros temporales
-*.log
+*.logWeb Service.zip
+
+# Comprimidos
+*.zip
+*.rar
+*.7zip
