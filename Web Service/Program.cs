@@ -601,7 +601,7 @@ ORDER BY
                         string ext = Path.GetExtension(destino);
                         destino = Path.Combine(carpetaProcesados, $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
                     }
-                    File.Move(archivo, destino);
+                    //File.Move(archivo, destino);
                     contadorXmls++;
 
                     // SB1 (productos de la BOP)
