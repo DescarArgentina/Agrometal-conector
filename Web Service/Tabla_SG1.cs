@@ -34,13 +34,13 @@ namespace Web_Service
 		private readonly HttpClient _httpClient;
 
 		private const string SG1_POST_URL = "http://119.8.73.193:8096/rest/TCEstructura/Incluir/";
-		private const string SG1_PUT_URL = "http://119.8.73.193:8096/rest/TCEstructura/Modificar/";
-		private const string SG1_DELETE_URL = "http://119.8.73.193:8096/rest/TCEstructura/Eliminar/";
+		//private const string SG1_PUT_URL = "http://119.8.73.193:8096/rest/TCEstructura/Modificar/";
+		//private const string SG1_DELETE_URL = "http://119.8.73.193:8096/rest/TCEstructura/Eliminar/";
 
 		private const string USERNAME = "USERREST";
 		private const string PASSWORD = "restagr";
 
-		private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
+		private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(2);
 		private static readonly HttpClient _clientSG1 = CreateHttpClient();
 
 		// Productos que en la query original venían sin Codigo_Padre
@@ -97,27 +97,27 @@ namespace Web_Service
 			   || ex is TaskCanceledException
 			   || ex is IOException;
 
-		private static async Task<bool> EliminarEstructurasBopAsync(IEnumerable<string> codigos)
-		{
-			bool okGlobal = true;
+		//private static async Task<bool> EliminarEstructurasBopAsync(IEnumerable<string> codigos)
+		//{
+		//	bool okGlobal = true;
 
-			foreach (var codigo in codigos.Where(c => !string.IsNullOrWhiteSpace(c)))
-			{
-				var del = await EliminarEstructuraSG1Async(codigo);
+		//	foreach (var codigo in codigos.Where(c => !string.IsNullOrWhiteSpace(c)))
+		//	{
+		//		var del = await EliminarEstructuraSG1Async(codigo);
 
-				if (!del.ok)
-				{
-					okGlobal = false;
-					Log($"[SG1-RESET] DELETE falló para {codigo}. status={del.statusCode}. resp={del.responseBody}");
-				}
-				else
-				{
-					Log($"[SG1-RESET] DELETE OK para {codigo}. status={del.statusCode}");
-				}
-			}
+		//		if (!del.ok)
+		//		{
+		//			okGlobal = false;
+		//			Log($"[SG1-RESET] DELETE falló para {codigo}. status={del.statusCode}. resp={del.responseBody}");
+		//		}
+		//		else
+		//		{
+		//			Log($"[SG1-RESET] DELETE OK para {codigo}. status={del.statusCode}");
+		//		}
+		//	}
 
-			return okGlobal;
-		}
+		//	return okGlobal;
+		//}
 
 		private sealed class WsError
 		{
@@ -167,27 +167,27 @@ namespace Web_Service
 			}
 		}
 
-		private static bool ContainsRecursiv(string? text)
-		{
-			if (string.IsNullOrWhiteSpace(text))
-				return false;
+		//private static bool ContainsRecursiv(string? text)
+		//{
+		//	if (string.IsNullOrWhiteSpace(text))
+		//		return false;
 
-			return text.IndexOf("recursiv", StringComparison.OrdinalIgnoreCase) >= 0;
-		}
+		//	return text.IndexOf("recursiv", StringComparison.OrdinalIgnoreCase) >= 0;
+		//}
 
-		private static bool IsRecursividadError(string responseBody)
-		{
-			if (string.IsNullOrWhiteSpace(responseBody))
-				return false;
+		//private static bool IsRecursividadError(string responseBody)
+		//{
+		//	if (string.IsNullOrWhiteSpace(responseBody))
+		//		return false;
 
-			if (TryParseWsError(responseBody, out var code, out var msg))
-			{
-				if (code == 6 && ContainsRecursiv(msg))
-					return true;
-			}
+		//	if (TryParseWsError(responseBody, out var code, out var msg))
+		//	{
+		//		if (code == 6 && ContainsRecursiv(msg))
+		//			return true;
+		//	}
 
-			return ContainsRecursiv(responseBody);
-		}
+		//	return ContainsRecursiv(responseBody);
+		//}
 
 		// =========================
 		// POST RAW (ahora loguea estilo SB1)
@@ -242,64 +242,64 @@ namespace Web_Service
 			}
 		}
 
-		private static async Task<(bool ok, int statusCode, string responseBody)> EliminarEstructuraSG1Async(string codigo)
-		{
-			int intento = 0;
+		//private static async Task<(bool ok, int statusCode, string responseBody)> EliminarEstructuraSG1Async(string codigo)
+		//{
+		//	int intento = 0;
 
-			// Payload del DELETE (esto ES json request => al log JSON)
-			var payload = JsonConvert.SerializeObject(new { producto = codigo }, Formatting.None);
-			LogJson($"[SG1][DELETE] JSON payload para producto {codigo}:", payload);
+		//	// Payload del DELETE (esto ES json request => al log JSON)
+		//	var payload = JsonConvert.SerializeObject(new { producto = codigo }, Formatting.None);
+		//	LogJson($"[SG1][DELETE] JSON payload para producto {codigo}:", payload);
 
-			while (true)
-			{
-				intento++;
+		//	while (true)
+		//	{
+		//		intento++;
 
-				try
-				{
-					await ProtheusHealth.WaitUntilActiveAsync("SG1-DELETE", RetryDelay);
+		//		try
+		//		{
+		//			await ProtheusHealth.WaitUntilActiveAsync("SG1-DELETE", RetryDelay);
 
-					using var req = new HttpRequestMessage(HttpMethod.Delete, SG1_DELETE_URL)
-					{
-						Content = new StringContent(payload, Encoding.UTF8, "application/json")
-					};
+		//			using var req = new HttpRequestMessage(HttpMethod.Delete, SG1_DELETE_URL)
+		//			{
+		//				Content = new StringContent(payload, Encoding.UTF8, "application/json")
+		//			};
 
-					using HttpResponseMessage resp = await _clientSG1.SendAsync(req);
+		//			using HttpResponseMessage resp = await _clientSG1.SendAsync(req);
 
-					int status = (int)resp.StatusCode;
-					string body = await resp.Content.ReadAsStringAsync();
-					LogErrorProtheusIfAny("SG1", "DELETE", codigo, body);
+		//			int status = (int)resp.StatusCode;
+		//			string body = await resp.Content.ReadAsStringAsync();
+		//			LogErrorProtheusIfAny("SG1", "DELETE", codigo, body);
 
-					if (IsRetryableStatus(resp.StatusCode))
-					{
-						Log($"[SG1][DELETE] {status} para {codigo}. Reintento en 5 minutos. Intento #{intento}");
-						Log($"[SG1][DELETE] Respuesta: {body}");
-						await Task.Delay(RetryDelay);
-						continue;
-					}
+		//			if (IsRetryableStatus(resp.StatusCode))
+		//			{
+		//				Log($"[SG1][DELETE] {status} para {codigo}. Reintento en 5 minutos. Intento #{intento}");
+		//				Log($"[SG1][DELETE] Respuesta: {body}");
+		//				await Task.Delay(RetryDelay);
+		//				continue;
+		//			}
 
-					if (resp.IsSuccessStatusCode)
-					{
-						Log($"[SG1][DELETE] OK para {codigo}: {status} - {body}");
-						await ProtheusHealth.PostCheckBestEffortAsync("SG1-DELETE");
-						return (true, status, body);
-					}
+		//			if (resp.IsSuccessStatusCode)
+		//			{
+		//				Log($"[SG1][DELETE] OK para {codigo}: {status} - {body}");
+		//				await ProtheusHealth.PostCheckBestEffortAsync("SG1-DELETE");
+		//				return (true, status, body);
+		//			}
 
-					Log($"[SG1][DELETE] ERROR NO-RETRY para {codigo}: {status} {resp.ReasonPhrase}. Contenido: {body}");
-					return (false, status, body);
-				}
-				catch (Exception ex) when (IsRetryableException(ex))
-				{
-					Log($"[SG1][DELETE] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento en 5 minutos. Intento #{intento}");
-					await Task.Delay(RetryDelay);
-					continue;
-				}
-				catch (Exception ex)
-				{
-					Log($"[SG1][DELETE] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
-					return (false, 0, ex.ToString());
-				}
-			}
-		}
+		//			Log($"[SG1][DELETE] ERROR NO-RETRY para {codigo}: {status} {resp.ReasonPhrase}. Contenido: {body}");
+		//			return (false, status, body);
+		//		}
+		//		catch (Exception ex) when (IsRetryableException(ex))
+		//		{
+		//			Log($"[SG1][DELETE] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento en 5 minutos. Intento #{intento}");
+		//			await Task.Delay(RetryDelay);
+		//			continue;
+		//		}
+		//		catch (Exception ex)
+		//		{
+		//			Log($"[SG1][DELETE] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+		//			return (false, 0, ex.ToString());
+		//		}
+		//	}
+		//}
 
 		
         // Placeholder temporal: después reemplazar por la query real para 1 WorkArea
@@ -1090,7 +1090,7 @@ ORDER BY
 			Dictionary<string, List<List<Dictionary<string, string>>>> estructurasBopCompleta,
 			bool yaHizoResetGlobal = false)
 		{
-			var putFallBack = new Dictionary<string, List<List<Dictionary<string, string>>>>();
+			//var putFallBack = new Dictionary<string, List<List<Dictionary<string, string>>>>();
 
 			Log($"[SG1-POST] Iniciando envío masivo. Productos: {estructurasBopCompleta.Count}");
 
@@ -1112,44 +1112,44 @@ ORDER BY
 
 				var (statusCode, httpStatus, responseData) = await PostSG1RawAsync(producto, jsonData);
 
-				if (httpStatus == HttpStatusCode.Conflict)
-				{
-					Log($"[SG1][POST] 409 Conflict para {producto}. Se acumula para PUT.");
-					putFallBack[producto] = parent.Value;
-					ActualizarBase(statusCode, responseData, producto);
-					continue;
-				}
+				//if (httpStatus == HttpStatusCode.Conflict)
+				//{
+				//	Log($"[SG1][POST] 409 Conflict para {producto}. Se acumula para PUT.");
+				//	//putFallBack[producto] = parent.Value;
+				//	ActualizarBase(statusCode, responseData, producto);
+				//	continue;
+				//}
 
 				ActualizarBase(statusCode, responseData, producto);
 			}
 
-			if (putFallBack.Count > 0)
-			{
-				Log($"[SG1-POST] POST finalizado. 409 acumulados={putFallBack.Count}. Disparando PUT...");
-				await putSG1(putFallBack, estructurasBopCompleta, yaHizoResetGlobal);
-			}
-			else
-			{
-				Log("[SG1-POST] POST finalizado. Sin 409.");
-			}
+			//if (putFallBack.Count > 0)
+			//{
+			//	Log($"[SG1-POST] POST finalizado. 409 acumulados={putFallBack.Count}. Disparando PUT...");
+			//	await putSG1(putFallBack, estructurasBopCompleta, yaHizoResetGlobal);
+			//}
+			//else
+			//{
+			//	Log("[SG1-POST] POST finalizado. Sin 409.");
+			//}
 		}
 
-		private static (string codigo, List<List<Dictionary<string, string>>> estructura)
-			ConvertirJsonAEstructura(string jsonString)
-		{
-			var root = JObject.Parse(jsonString);
+		//private static (string codigo, List<List<Dictionary<string, string>>> estructura)
+		//	ConvertirJsonAEstructura(string jsonString)
+		//{
+		//	var root = JObject.Parse(jsonString);
 
-			string codigo = root["producto"]?.ToString()
-				?? throw new InvalidOperationException("JSON sin 'producto'.");
+		//	string codigo = root["producto"]?.ToString()
+		//		?? throw new InvalidOperationException("JSON sin 'producto'.");
 
-			var estructuraToken = root["estructura"]
-				?? throw new InvalidOperationException("JSON sin 'estructura'.");
+		//	var estructuraToken = root["estructura"]
+		//		?? throw new InvalidOperationException("JSON sin 'estructura'.");
 
-			var estructura = estructuraToken.ToObject<List<List<Dictionary<string, string>>>>()
-				?? throw new InvalidOperationException("No se pudo mapear 'estructura'.");
+		//	var estructura = estructuraToken.ToObject<List<List<Dictionary<string, string>>>>()
+		//		?? throw new InvalidOperationException("No se pudo mapear 'estructura'.");
 
-			return (codigo, estructura);
-		}
+		//	return (codigo, estructura);
+		//}
 
 		public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_BOP()
 		{
@@ -1195,124 +1195,124 @@ ORDER BY
 			return estructuras;
 		}
 
-		public static async Task putSG1(
-			Dictionary<string, List<List<Dictionary<string, string>>>> estructuras409,
-			Dictionary<string, List<List<Dictionary<string, string>>>> estructurasBopCompleta,
-			bool yaHizoResetGlobal)
-		{
-			Log($"[SG1-PUT] Iniciando PUT masivo. Cantidad de productos: {estructuras409.Count}");
+		//public static async Task putSG1(
+		//	Dictionary<string, List<List<Dictionary<string, string>>>> estructuras409,
+		//	Dictionary<string, List<List<Dictionary<string, string>>>> estructurasBopCompleta,
+		//	bool yaHizoResetGlobal)
+		//{
+		//	Log($"[SG1-PUT] Iniciando PUT masivo. Cantidad de productos: {estructuras409.Count}");
 
-			bool recursividadDetectada = false;
-			string? codigoQueDisparo = null;
-			string? bodyQueDisparo = null;
+		//	bool recursividadDetectada = false;
+		//	string? codigoQueDisparo = null;
+		//	string? bodyQueDisparo = null;
 
-			foreach (var parent in estructuras409)
-			{
-				string producto = parent.Key;
+		//	foreach (var parent in estructuras409)
+		//	{
+		//		string producto = parent.Key;
 
-				var jsonBody = new
-				{
-					producto = parent.Key,
-					qtdBase = "1",
-					estructura = parent.Value
-				};
+		//		var jsonBody = new
+		//		{
+		//			producto = parent.Key,
+		//			qtdBase = "1",
+		//			estructura = parent.Value
+		//		};
 
-				string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
+		//		string jsonData = JsonConvert.SerializeObject(jsonBody, Formatting.Indented);
 
-				// JSON request -> log JSON
-				LogJson($"[SG1][PUT] JSON COMPLETO para producto {producto}:", jsonData);
+		//		// JSON request -> log JSON
+		//		LogJson($"[SG1][PUT] JSON COMPLETO para producto {producto}:", jsonData);
 
-				JObject obj = JObject.Parse(jsonData);
-				string? codigo = obj["producto"]?.ToString();
-				if (string.IsNullOrEmpty(codigo))
-					continue;
+		//		JObject obj = JObject.Parse(jsonData);
+		//		string? codigo = obj["producto"]?.ToString();
+		//		if (string.IsNullOrEmpty(codigo))
+		//			continue;
 
-				int intento = 0;
+		//		int intento = 0;
 
-				while (true)
-				{
-					intento++;
+		//		while (true)
+		//		{
+		//			intento++;
 
-					int statusCode = 0;
-					string responseData = string.Empty;
+		//			int statusCode = 0;
+		//			string responseData = string.Empty;
 
-					try
-					{
-						await ProtheusHealth.WaitUntilActiveAsync("SG1-PUT", RetryDelay);
-						using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-						using HttpResponseMessage response = await _clientSG1.PutAsync(SG1_PUT_URL, content);
+		//			try
+		//			{
+		//				await ProtheusHealth.WaitUntilActiveAsync("SG1-PUT", RetryDelay);
+		//				using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+		//				using HttpResponseMessage response = await _clientSG1.PutAsync(SG1_PUT_URL, content);
 
-						statusCode = (int)response.StatusCode;
-						responseData = await response.Content.ReadAsStringAsync();
-						LogErrorProtheusIfAny("SG1", "PUT", codigo, responseData);
+		//				statusCode = (int)response.StatusCode;
+		//				responseData = await response.Content.ReadAsStringAsync();
+		//				LogErrorProtheusIfAny("SG1", "PUT", codigo, responseData);
 
-						if (!response.IsSuccessStatusCode &&
-							!IsRetryableStatus(response.StatusCode) &&
-							IsRecursividadError(responseData))
-						{
-							recursividadDetectada = true;
-							codigoQueDisparo = codigo;
-							bodyQueDisparo = responseData;
+		//				if (!response.IsSuccessStatusCode &&
+		//					!IsRetryableStatus(response.StatusCode) &&
+		//					IsRecursividadError(responseData))
+		//				{
+		//					recursividadDetectada = true;
+		//					codigoQueDisparo = codigo;
+		//					bodyQueDisparo = responseData;
 
-							Log($"[SG1][PUT] Recursividad detectada en {codigo}. Se solicita RESET global de la BOP.");
-							break;
-						}
+		//					Log($"[SG1][PUT] Recursividad detectada en {codigo}. Se solicita RESET global de la BOP.");
+		//					break;
+		//				}
 
-						if (IsRetryableStatus(response.StatusCode))
-						{
-							Log($"[SG1][PUT] Protheus respondió {statusCode}. Reintento en 5 minutos. Intento #{intento}");
-							Log($"[SG1][PUT] Respuesta: {responseData}");
-							await Task.Delay(RetryDelay);
-							continue;
-						}
+		//				if (IsRetryableStatus(response.StatusCode))
+		//				{
+		//					Log($"[SG1][PUT] Protheus respondió {statusCode}. Reintento en 5 minutos. Intento #{intento}");
+		//					Log($"[SG1][PUT] Respuesta: {responseData}");
+		//					await Task.Delay(RetryDelay);
+		//					continue;
+		//				}
 
-						Log($"[SG1][PUT] Código de estado: {statusCode}");
-						Log($"[SG1][PUT] Respuesta: {responseData}");
+		//				Log($"[SG1][PUT] Código de estado: {statusCode}");
+		//				Log($"[SG1][PUT] Respuesta: {responseData}");
 
-						await ProtheusHealth.PostCheckBestEffortAsync("SG1-PUT");
-						ActualizarBase(statusCode, responseData, codigo);
-						break;
-					}
-					catch (Exception ex) when (IsRetryableException(ex))
-					{
-						Log($"[SG1][PUT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento en 5 minutos. Intento #{intento}");
-						await Task.Delay(RetryDelay);
-						continue;
-					}
-					catch (Exception ex)
-					{
-						Log($"[SG1][PUT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
-						ActualizarBase(0, ex.ToString(), codigo);
-						break;
-					}
-				}
+		//				await ProtheusHealth.PostCheckBestEffortAsync("SG1-PUT");
+		//				ActualizarBase(statusCode, responseData, codigo);
+		//				break;
+		//			}
+		//			catch (Exception ex) when (IsRetryableException(ex))
+		//			{
+		//				Log($"[SG1][PUT] EXCEPCIÓN transitoria para {codigo}: {ex.Message}. Reintento en 5 minutos. Intento #{intento}");
+		//				await Task.Delay(RetryDelay);
+		//				continue;
+		//			}
+		//			catch (Exception ex)
+		//			{
+		//				Log($"[SG1][PUT] EXCEPCIÓN NO transitoria para {codigo}: {ex}");
+		//				ActualizarBase(0, ex.ToString(), codigo);
+		//				break;
+		//			}
+		//		}
 
-				if (recursividadDetectada)
-					break;
-			}
+		//		if (recursividadDetectada)
+		//			break;
+		//	}
 
-			if (!recursividadDetectada)
-			{
-				Log("[SG1-PUT] PUT masivo finalizado sin recursividad.");
-				return;
-			}
+		//	if (!recursividadDetectada)
+		//	{
+		//		Log("[SG1-PUT] PUT masivo finalizado sin recursividad.");
+		//		return;
+		//	}
 
-			if (yaHizoResetGlobal)
-			{
-				Log($"[SG1-RESET] Recursividad volvió a ocurrir (disparó {codigoQueDisparo}). Ya se hizo reset global antes, se aborta reproceso. Body: {bodyQueDisparo}");
-				if (!string.IsNullOrWhiteSpace(codigoQueDisparo))
-					ActualizarBase(0, $"Recursividad persistente. Body={bodyQueDisparo}", codigoQueDisparo);
-				return;
-			}
+		//	if (yaHizoResetGlobal)
+		//	{
+		//		Log($"[SG1-RESET] Recursividad volvió a ocurrir (disparó {codigoQueDisparo}). Ya se hizo reset global antes, se aborta reproceso. Body: {bodyQueDisparo}");
+		//		if (!string.IsNullOrWhiteSpace(codigoQueDisparo))
+		//			ActualizarBase(0, $"Recursividad persistente. Body={bodyQueDisparo}", codigoQueDisparo);
+		//		return;
+		//	}
 
-			Log($"[SG1-RESET] Iniciando RESET global por recursividad. Disparó={codigoQueDisparo}. Se eliminarán {estructurasBopCompleta.Count} estructuras.");
+		//	Log($"[SG1-RESET] Iniciando RESET global por recursividad. Disparó={codigoQueDisparo}. Se eliminarán {estructurasBopCompleta.Count} estructuras.");
 
-			var okDelete = await EliminarEstructurasBopAsync(estructurasBopCompleta.Keys);
+		//	var okDelete = await EliminarEstructurasBopAsync(estructurasBopCompleta.Keys);
 
-			Log($"[SG1-RESET] RESET global finalizado. okDelete={okDelete}. Se reprocesa BOP completa.");
+		//	Log($"[SG1-RESET] RESET global finalizado. okDelete={okDelete}. Se reprocesa BOP completa.");
 
-			await postSG1(estructurasBopCompleta, yaHizoResetGlobal: true);
-		}
+		//	await postSG1(estructurasBopCompleta, yaHizoResetGlobal: true);
+		//}
 
 
 		public static Dictionary<string, List<List<Dictionary<string, string>>>> jsonSG1_MBOM(HashSet<string> codigosFantasma)

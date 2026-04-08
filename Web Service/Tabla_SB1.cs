@@ -15,7 +15,7 @@ namespace Web_Service
     public static class Tabla_SB1
     {
         private const string BaseUrlPost = "http://119.8.73.193:8096/rest/TCProductos/Incluir/";
-        private const string BaseUrlPut = "http://119.8.73.193:8096/rest/TCProductos/Modificar/";
+       // private const string BaseUrlPut = "http://119.8.73.193:8096/rest/TCProductos/Modificar/";
         private const string Username = "USERREST";
         private const string Password = "restagr";
         private const string consultaSB1_BOP_Con1Workarea = @"
@@ -516,6 +516,244 @@ WITH CTE_Hierarchy AS (
       R.Nivel,
       R.Codigo_Hijo DESC;
     ";
+        private const string consultaSB1_BOP_SinWorkArea = @"
+WITH CTE_Hierarchy AS (
+SELECT
+o.id_Table,
+pr.name,
+CASE
+WHEN LEFT(p.catalogueId, 2) = 'P-'
+THEN RIGHT(p.catalogueId, LEN(p.catalogueId) - 2)
+ELSE p.catalogueId
+END AS catalogueId,
+CAST(o.parentRef AS INT) AS parentRef,
+pr.revision,
+pr.subType,
+o.idXml,
+'PA' AS Tipo,
+'UN' AS unMedida,
+CAST(NULL AS varchar(50)) AS WorkArea_CatalogueId,
+CAST(NULL AS varchar(255)) AS WorkArea_Nombre,
+CAST(NULL AS varchar(20)) AS WorkArea_Revision
+FROM ProcessOccurrence o
+INNER JOIN ProcessRevision pr ON o.instancedRef = pr.id_Table
+INNER JOIN Process p ON pr.masterRef = p.id_Table
+),
+CTE_Niveles AS (
+SELECT
+h.*,
+0 AS Nivel
+FROM CTE_Hierarchy h
+WHERE h.parentRef IS NULL OR h.parentRef = 0
+
+UNION ALL
+
+SELECT
+h.*,
+n.Nivel + 1
+FROM CTE_Hierarchy h
+INNER JOIN CTE_Niveles n ON h.parentRef = n.id_Table
+)
+SELECT *
+FROM (
+SELECT
+COALESCE(Parent.name, '') AS Nombre_Padre,
+COALESCE(Parent.catalogueId, '') AS Process_codigo,
+CASE
+WHEN LEFT(Child.catalogueId, 2) = 'PR'
+THEN Child.name + ' - Proceso: ' + COALESCE(Parent.catalogueId, '')
+ELSE Child.name
+END AS Nombre_Hijo,
+Child.catalogueId AS Codigo_Hijo,
+Child.subType AS Subtype_Hijo,
+Child.revision AS Revision,
+1 AS CantidadHijo_Total,
+nChild.Nivel AS Nivel,
+CASE
+WHEN LEFT(Child.catalogueId, 2) = 'PR'
+AND RIGHT(Child.catalogueId, 1) = 'T'
+THEN 'SV'
+WHEN Child.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
+THEN 'MP'
+WHEN LEFT(Child.catalogueId, 2) = 'PR'
+THEN 'PI'
+ELSE 'PA'
+END AS Tipo,
+Child.unMedida,
+Child.WorkArea_CatalogueId,
+Child.WorkArea_Nombre,
+Child.WorkArea_Revision
+FROM CTE_Niveles nChild
+LEFT JOIN CTE_Niveles nParent ON nChild.parentRef = nParent.id_Table
+LEFT JOIN CTE_Hierarchy Parent ON nParent.id_Table = Parent.id_Table
+LEFT JOIN CTE_Hierarchy Child ON nChild.id_Table = Child.id_Table
+
+UNION ALL
+
+SELECT
+Operation.name AS Nombre_Padre,
+p2.catalogueId AS Process_codigo,
+CASE
+WHEN LEFT(x.CodigoNorm, 2) = 'PR'
+THEN p.name + '- Proceso: ' + COALESCE(p2.catalogueId, '')
+ELSE p.name
+END AS Nombre_Hijo,
+x.CodigoNorm AS Codigo_Hijo,
+pr.subType AS Subtype_Hijo,
+pr.revision AS Revision,
+COUNT(p.productId) AS CantidadHijo_Total,
+3 AS Nivel,
+CASE
+WHEN LEFT(x.CodigoNorm, 2) = 'PR'
+AND RIGHT(x.CodigoNorm, 1) = 'T'
+THEN 'SV'
+WHEN pr.subType IN ('Agm4_RepCompradoRevision','Agm4_MatPrimaRevision')
+THEN 'MP'
+WHEN LEFT(x.CodigoNorm, 2) = 'PR'
+THEN 'PI'
+ELSE 'PA'
+END AS Tipo,
+COALESCE(
+NULLIF(MAX(uomTagProd.ValueTag), ''),
+MAX(uomUnitProd.UnidadMedida),
+'UN'
+) AS unMedida,
+CAST(NULL AS varchar(50)) AS WorkArea_CatalogueId,
+CAST(NULL AS varchar(255)) AS WorkArea_Nombre,
+CAST(NULL AS varchar(20)) AS WorkArea_Revision
+FROM Occurrence
+INNER JOIN ProductRevision pr ON pr.id_Table = Occurrence.instancedRef
+INNER JOIN Product p ON p.id_Table = pr.masterRef
+
+LEFT JOIN ProcessOccurrence o ON Occurrence.parentRef = o.id_Table
+LEFT JOIN OperationRevision op ON op.id_Table = o.instancedRef
+LEFT JOIN Operation ON Operation.id_Table = op.masterRef
+
+LEFT JOIN ProcessOccurrence o2 ON o2.id_Table = o.parentRef
+LEFT JOIN ProcessRevision pr2 ON o2.instancedRef = pr2.id_Table
+LEFT JOIN Process p2 ON pr2.masterRef = p2.id_Table
+
+OUTER APPLY (
+SELECT TOP 1 s.ValueTag, s.DataRef, s.UnitIdTable
+FROM (
+SELECT
+uvp.value AS ValueTag,
+uvp.dataRef AS DataRef,
+TRY_CONVERT(int, REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(uvp.dataRef)),'#',''),'ID',''),'id','')) AS UnitIdTable,
+1 AS prio
+FROM UserValue_Product uvp
+WHERE uvp.idXml = p.idXml
+AND uvp.title = 'uom_tag'
+AND uvp.id_Father = p.id_Table
+
+UNION ALL
+
+SELECT
+uvp2.value,
+uvp2.dataRef,
+TRY_CONVERT(int, REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(uvp2.dataRef)),'#',''),'ID',''),'id','')),
+2
+FROM UserData udp
+INNER JOIN UserValue_Product uvp2
+ON uvp2.id_Father = udp.id_Table
+AND uvp2.idXml = udp.idXml
+WHERE udp.idXml = p.idXml
+AND udp.id_Father = p.id_Table
+AND uvp2.title = 'uom_tag'
+) s
+ORDER BY s.prio
+) AS uomTagProd
+
+OUTER APPLY (
+SELECT TOP 1 t.UnidadMedida
+FROM (
+SELECT
+CASE
+WHEN uvu.title = 'Agm4_Kilogramos' THEN uvu.value
+WHEN uvu.title = 'Agm4_Litros' THEN uvu.value
+WHEN uvu.title = 'Agm4_Metros' THEN uvu.value
+WHEN uvu.title = 'Agm4_Unidad' THEN uvu.value
+ELSE NULL
+END AS UnidadMedida,
+CASE uvu.title
+WHEN 'Agm4_Kilogramos' THEN 1
+WHEN 'Agm4_Litros' THEN 2
+WHEN 'Agm4_Metros' THEN 3
+WHEN 'Agm4_Unidad' THEN 4
+ELSE 99
+END AS prio
+FROM Unit u
+INNER JOIN UserValue_Unit uvu
+ON uvu.id_Father = u.id_Table
+AND uvu.idXml = u.idXml
+WHERE u.idXml = p.idXml
+AND uomTagProd.UnitIdTable IS NOT NULL
+AND u.id_Table = uomTagProd.UnitIdTable
+AND uvu.title IN ('Agm4_Unidad','Agm4_Kilogramos','Agm4_Litros','Agm4_Metros')
+
+UNION ALL
+
+SELECT
+CASE
+WHEN uuv.title = 'Agm4_Kilogramos' THEN uuv.value
+WHEN uuv.title = 'Agm4_Litros' THEN uuv.value
+WHEN uuv.title = 'Agm4_Metros' THEN uuv.value
+WHEN uuv.title = 'Agm4_Unidad' THEN uuv.value
+ELSE NULL
+END,
+CASE uuv.title
+WHEN 'Agm4_Kilogramos' THEN 11
+WHEN 'Agm4_Litros' THEN 12
+WHEN 'Agm4_Metros' THEN 13
+WHEN 'Agm4_Unidad' THEN 14
+ELSE 199
+END
+FROM Unit u
+INNER JOIN UserData ud_u
+ON ud_u.id_Father = u.id_Table
+AND ud_u.idXml = u.idXml
+INNER JOIN UserValue_UserData uuv
+ON uuv.id_Father = ud_u.id_Table
+AND uuv.idXml = ud_u.idXml
+WHERE u.idXml = p.idXml
+AND uomTagProd.UnitIdTable IS NOT NULL
+AND u.id_Table = uomTagProd.UnitIdTable
+AND uuv.title IN ('Agm4_Unidad','Agm4_Kilogramos','Agm4_Litros','Agm4_Metros')
+) t
+WHERE t.UnidadMedida IS NOT NULL AND LTRIM(RTRIM(t.UnidadMedida)) <> ''
+ORDER BY t.prio
+) AS uomUnitProd
+
+CROSS APPLY (
+SELECT
+CASE
+WHEN LEFT(p.productId, 1) = 'E'
+THEN RIGHT(p.productId, LEN(p.productId) - 1)
+ELSE p.productId
+END AS CodigoNorm
+) AS x
+
+WHERE
+(
+Occurrence.subType = 'MEConsumed'
+OR (
+(Occurrence.subType IS NULL OR LTRIM(RTRIM(Occurrence.subType)) = '')
+AND op.id_Table IS NOT NULL
+)
+)
+
+GROUP BY
+Operation.name,
+p2.catalogueId,
+p.name,
+x.CodigoNorm,
+pr.subType,
+pr.revision
+) R
+ORDER BY
+R.Nivel,
+R.Codigo_Hijo DESC;
+    ";
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
 
         // Reutilizar HttpClient (MUY importante en procesos/servicios)
@@ -525,7 +763,7 @@ WITH CTE_Hierarchy AS (
         {
             var client = new HttpClient
             {
-                Timeout = TimeSpan.FromMinutes(2) // ajustá si Protheus tarda más
+                Timeout = TimeSpan.FromMinutes(5) // ajustá si Protheus tarda más
             };
 
             var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Username}:{Password}"));
@@ -748,12 +986,12 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
                     LogErrorProtheusIfAny("SB1", "POST", codigo, responseData);
 
                     // 409 => hacer PUT (el PUT también reintenta)
-                    if (response.StatusCode == HttpStatusCode.Conflict)
-                    {
-                        Log($"[SB1][POST] 409 Conflict. Intentando PUT /Modificar... (intento POST #{intento})");
-                        await putSB1(jsonData);
-                        return;
-                    }
+                    //if (response.StatusCode == HttpStatusCode.Conflict)
+                    //{
+                    //    Log($"[SB1][POST] 409 Conflict. Intentando PUT /Modificar... (intento POST #{intento})");
+                    //    await putSB1(jsonData);
+                    //    return;
+                    //}
 
                     // Reintento infinito ante 5xx
                     if (IsRetryableStatus(response.StatusCode))
@@ -786,113 +1024,113 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
             }
         }
 
-        public static async Task putSB1(string jsonData)
-        {
-            void Log(string msg)
-            {
-                Console.WriteLine(msg);
-                Utilidades.EscribirEnLog(msg);
-            }
+        //public static async Task putSB1(string jsonData)
+        //{
+        //    void Log(string msg)
+        //    {
+        //        Console.WriteLine(msg);
+        //        Utilidades.EscribirEnLog(msg);
+        //    }
 
-            void LogJson(string header, string json)
-            {
-                Utilidades.EscribirJSONEnLog($"{header}\n{json}");
-            }
+        //    void LogJson(string header, string json)
+        //    {
+        //        Utilidades.EscribirJSONEnLog($"{header}\n{json}");
+        //    }
 
-            bool LooksLikeJson(string s)
-            {
-                if (string.IsNullOrWhiteSpace(s)) return false;
-                var t = s.TrimStart();
-                return t.StartsWith("{") || t.StartsWith("[");
-            }
+        //    bool LooksLikeJson(string s)
+        //    {
+        //        if (string.IsNullOrWhiteSpace(s)) return false;
+        //        var t = s.TrimStart();
+        //        return t.StartsWith("{") || t.StartsWith("[");
+        //    }
 
-            JObject obj;
-            try
-            {
-                obj = JObject.Parse(jsonData);
-            }
-            catch (JsonException ex)
-            {
-                Log($"[SB1][PUT] Error al parsear JSON: {ex.Message}");
-                LogJson("[SB1][PUT] JSON recibido (inválido):", jsonData);
-                return;
-            }
+        //    JObject obj;
+        //    try
+        //    {
+        //        obj = JObject.Parse(jsonData);
+        //    }
+        //    catch (JsonException ex)
+        //    {
+        //        Log($"[SB1][PUT] Error al parsear JSON: {ex.Message}");
+        //        LogJson("[SB1][PUT] JSON recibido (inválido):", jsonData);
+        //        return;
+        //    }
 
-            var productos = obj["producto"];
+        //    var productos = obj["producto"];
 
-            string codigo = null;
-            string descripcion = null;
-            string revision = null;
+        //    string codigo = null;
+        //    string descripcion = null;
+        //    string revision = null;
 
-            if (productos != null)
-            {
-                foreach (var item in productos)
-                {
-                    var campo = item["campo"]?.ToString();
-                    var valor = item["valor"]?.ToString();
+        //    if (productos != null)
+        //    {
+        //        foreach (var item in productos)
+        //        {
+        //            var campo = item["campo"]?.ToString();
+        //            var valor = item["valor"]?.ToString();
 
-                    if (campo == "codigo") codigo = valor;
-                    if (campo == "descripcion") descripcion = valor;
-                    if (campo == "revision") revision = valor; // opcional, si existe en el JSON
-                }
-            }
+        //            if (campo == "codigo") codigo = valor;
+        //            if (campo == "descripcion") descripcion = valor;
+        //            if (campo == "revision") revision = valor; // opcional, si existe en el JSON
+        //        }
+        //    }
 
-            Log($"[SB1][PUT] Modificando producto -> codigo: {codigo}, descripcion: {descripcion}");
-            LogJson($"[SB1][PUT] JSON COMPLETO para producto {(string.IsNullOrEmpty(codigo) ? "(sin codigo)" : codigo)}:", jsonData);
+        //    Log($"[SB1][PUT] Modificando producto -> codigo: {codigo}, descripcion: {descripcion}");
+        //    LogJson($"[SB1][PUT] JSON COMPLETO para producto {(string.IsNullOrEmpty(codigo) ? "(sin codigo)" : codigo)}:", jsonData);
 
-            int intento = 0;
+        //    int intento = 0;
 
-            while (true)
-            {
-                intento++;
+        //    while (true)
+        //    {
+        //        intento++;
 
-                try
-                {
-                    await ProtheusHealth.WaitUntilActiveAsync("SB1-PUT", RetryDelay);
+        //        try
+        //        {
+        //            await ProtheusHealth.WaitUntilActiveAsync("SB1-PUT", RetryDelay);
 
-                    using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-                    using HttpResponseMessage response = await _client.PutAsync(BaseUrlPut, content);
+        //            using var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+        //            using HttpResponseMessage response = await _client.PutAsync(BaseUrlPut, content);
 
-                    int statusCode = (int)response.StatusCode;
-                    string responseData = await response.Content.ReadAsStringAsync();
+        //            int statusCode = (int)response.StatusCode;
+        //            string responseData = await response.Content.ReadAsStringAsync();
 
-                    // Si la respuesta es JSON, mandarla al log JSON (además de log normal)
-                    if (LooksLikeJson(responseData))
-                        LogJson($"[SB1][PUT] RESPUESTA JSON para {codigo} (HTTP {statusCode}):", responseData);
+        //            // Si la respuesta es JSON, mandarla al log JSON (además de log normal)
+        //            if (LooksLikeJson(responseData))
+        //                LogJson($"[SB1][PUT] RESPUESTA JSON para {codigo} (HTTP {statusCode}):", responseData);
 
-                    // Si viene errorCode, loguear
-                    LogErrorProtheusIfAny("SB1", "PUT", codigo, responseData);
+        //            // Si viene errorCode, loguear
+        //            LogErrorProtheusIfAny("SB1", "PUT", codigo, responseData);
 
-                    // Reintento infinito ante 5xx
-                    if (IsRetryableStatus(response.StatusCode))
-                    {
-                        Log($"[SB1][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
-                        Log($"[SB1][PUT] Respuesta: {responseData}");
-                        await Task.Delay(RetryDelay);
-                        continue;
-                    }
+        //            // Reintento infinito ante 5xx
+        //            if (IsRetryableStatus(response.StatusCode))
+        //            {
+        //                Log($"[SB1][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento}");
+        //                Log($"[SB1][PUT] Respuesta: {responseData}");
+        //                await Task.Delay(RetryDelay);
+        //                continue;
+        //            }
 
-                    // No reintentar: registramos resultado final
-                    Log($"[SB1][PUT] Código de estado: {statusCode}");
-                    Log($"[SB1][PUT] Respuesta: {responseData}");
+        //            // No reintentar: registramos resultado final
+        //            Log($"[SB1][PUT] Código de estado: {statusCode}");
+        //            Log($"[SB1][PUT] Respuesta: {responseData}");
 
-                    await ProtheusHealth.PostCheckBestEffortAsync("SB1-PUT");
-                    ActualizarBase(statusCode, responseData, codigo, descripcion);
-                    return;
-                }
-                catch (Exception ex) when (IsRetryableException(ex))
-                {
-                    Log($"[SB1][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
-                    await Task.Delay(RetryDelay);
-                    continue;
-                }
-                catch (Exception ex)
-                {
-                    Log($"[SB1][PUT] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
-                    return;
-                }
-            }
-        }
+        //            await ProtheusHealth.PostCheckBestEffortAsync("SB1-PUT");
+        //            ActualizarBase(statusCode, responseData, codigo, descripcion);
+        //            return;
+        //        }
+        //        catch (Exception ex) when (IsRetryableException(ex))
+        //        {
+        //            Log($"[SB1][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento}");
+        //            await Task.Delay(RetryDelay);
+        //            continue;
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            Log($"[SB1][PUT] Error NO transitorio: {ex.Message}. Abortando envío para {codigo}.");
+        //            return;
+        //        }
+        //    }
+        //}
 
 		public static string BopProcesadaPath { get; set; } = string.Empty;
 		public static string CurrentBopCode { get; set; } = string.Empty;
@@ -954,8 +1192,8 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
             using (var cmd = new SqlCommand(@"
         IF COL_LENGTH('Occurrence', 'subType') IS NOT NULL
         AND EXISTS (
-            SELECT 1 
-            FROM Occurrence 
+            SELECT 1
+            FROM Occurrence
             WHERE subType = 'MEWorkarea'
         )
         SELECT 1;", connection))
@@ -972,14 +1210,33 @@ IF OBJECT_ID('dbo.WorkAreaOccurrence','U') IS NULL
 
                 return consultaSB1_BOP_Con1Workarea;
             }
+
+            bool tieneWorkAreaOccurrence;
+
+            using (var cmd = new SqlCommand(@"
+        IF COL_LENGTH('WorkAreaOccurrence', 'subType') IS NOT NULL
+            EXEC('IF EXISTS (SELECT 1 FROM WorkAreaOccurrence WHERE subType = ''MEWorkarea'') SELECT 1');", connection))
+            {
+                tieneWorkAreaOccurrence = ScalarTrue(cmd.ExecuteScalar());
+            }
+
+            if (tieneWorkAreaOccurrence)
+            {
+                usaWorkArea = true;
+
+                Utilidades.EscribirEnLog(
+                    "SB1 -> ObtenerConsultaSB1_BOP: WorkAreaOccurrence con subType=MEWorkarea → múltiples WorkAreas. Query=ConMasWorkareas.");
+
+                return consultaSB1_BOP_ConMasWorkareas;
+            }
             else
             {
                 usaWorkArea = false;
 
                 Utilidades.EscribirEnLog(
-                    "SB1 -> ObtenerConsultaSB1_BOP: Occurrence.subType ausente → múltiples WorkAreas. Query=ConMasWorkareas.");
+                    "SB1 -> ObtenerConsultaSB1_BOP: Sin WorkArea → Query=SinWorkArea.");
 
-                return consultaSB1_BOP_ConMasWorkareas;
+                return consultaSB1_BOP_SinWorkArea;
             }
         }
 
@@ -1565,9 +1822,6 @@ ORDER BY b.Process_codigo;
 			Utilidades.EscribirEnLog($"SB1[MBOM] -> filas SQL totales: {totalFilasSql}, códigos únicos: {productosDict.Count}");
 			return jsonProductos;
 		}
-
-
-
 
 
 
