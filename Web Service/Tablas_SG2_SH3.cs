@@ -33,7 +33,7 @@ namespace Web_Service
         // CONFIG PROTHEUS
         // =========================
         private const string UrlPost = "http://119.8.73.193:8096/rest/TCProceso/Incluir/";
-        private const string UrlPut = "http://119.8.73.193:8096/rest/TCProceso/Modificar/";
+        ////private const string UrlPut = "http://119.8.73.193:8096/rest/TCProceso/Modificar/";
 
         private const string Username = "USERREST";
         private const string Password = "restagr";
@@ -178,7 +178,7 @@ namespace Web_Service
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
 
         // Timeout “negocio” para POST/PUT
-        private static readonly TimeSpan BusinessTimeout = TimeSpan.FromSeconds(100);
+        private static readonly TimeSpan BusinessTimeout = TimeSpan.FromSeconds(300);
 
         // Cache para no sobrecargar el healthcheck
         private static DateTime _lastHealthOkUtc = DateTime.MinValue;
@@ -245,9 +245,9 @@ namespace Web_Service
             var err = TryParseWsError(body);
             int? errorCode = err?.errorCode;
 
-            // ✅ Purga: POST + errorCode=3 (registro existente) NO se registra (ruido)
-            if (string.Equals(metodo, "POST", StringComparison.OrdinalIgnoreCase) && errorCode == 3)
-                return;
+            //// ✅ Purga: POST + errorCode=3 (registro existente) NO se registra (ruido)
+            //if (string.Equals(metodo, "POST", StringComparison.OrdinalIgnoreCase) && errorCode == 3)
+            //    return;
 
             string msgBase = !string.IsNullOrWhiteSpace(err?.errorMessage)
                 ? err.errorMessage
@@ -320,18 +320,18 @@ namespace Web_Service
                     }
 
                     // Registro existente => PUT con retry infinito
-                    if (EsRegistroExistente(responsePost.StatusCode, bodyPost))
-                    {
-                        // ✅ No registrar acá como “error”, porque se resuelve con PUT.
-                        // (y si viniera errorCode=3, LogErrorProtheus ya lo filtraría)
+                    //if (EsRegistroExistente(responsePost.StatusCode, bodyPost))
+                    //{
+                    //    // ✅ No registrar acá como “error”, porque se resuelve con PUT.
+                    //    // (y si viniera errorCode=3, LogErrorProtheus ya lo filtraría)
 
-                        Console.WriteLine($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
-                        Utilidades.EscribirEnLog($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
+                    //    Console.WriteLine($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
+                    //    Utilidades.EscribirEnLog($"[SG2SH3][POST] Registro existente detectado. Disparando PUT. producto={codigo}");
 
-                        await PutSG2_SH3(jsonData, codigo);
-                        _ = PostCheckBestEffortAsync($"SG2SH3-PUTCHECK {codigo ?? ""}");
-                        return;
-                    }
+                    //    await PutSG2_SH3(jsonData, codigo);
+                    //    _ = PostCheckBestEffortAsync($"SG2SH3-PUTCHECK {codigo ?? ""}");
+                    //    return;
+                    //}
 
                     // 5xx => retry infinito (NO ensuciar ErroresProtheus en cada reintento)
                     if (IsRetryableStatus(responsePost.StatusCode))
@@ -367,69 +367,69 @@ namespace Web_Service
             }
         }
 
-        private static async Task PutSG2_SH3(string jsonData, string codigo)
-        {
-            Console.WriteLine($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
-            Utilidades.EscribirEnLog($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+        //private static async Task PutSG2_SH3(string jsonData, string codigo)
+        //{
+        //    Console.WriteLine($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
+        //    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Modificando TCProceso -> producto: {codigo ?? "(sin producto)"}");
 
-            int intento = 0;
+        //    int intento = 0;
 
-            while (true)
-            {
-                intento++;
+        //    while (true)
+        //    {
+        //        intento++;
 
-                try
-                {
-                    // Healthcheck PRE
-                    await WaitUntilProtheusActiveAsync($"SG2SH3-PUT {codigo ?? ""}");
+        //        try
+        //        {
+        //            // Healthcheck PRE
+        //            await WaitUntilProtheusActiveAsync($"SG2SH3-PUT {codigo ?? ""}");
 
-                    using var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
-                    using HttpResponseMessage responsePut = await _clientSG2SH3.PutAsync(UrlPut, contentPut);
-                    string bodyPut = await responsePut.Content.ReadAsStringAsync();
+        //            using var contentPut = new StringContent(jsonData, Encoding.UTF8, "application/json");
+        //            using HttpResponseMessage responsePut = await _clientSG2SH3.PutAsync(UrlPut, contentPut);
+        //            string bodyPut = await responsePut.Content.ReadAsStringAsync();
 
-                    int statusCode = (int)responsePut.StatusCode;
+        //            int statusCode = (int)responsePut.StatusCode;
 
-                    Console.WriteLine($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
-                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
-                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Body: {bodyPut}");
+        //            Console.WriteLine($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
+        //            Utilidades.EscribirEnLog($"[SG2SH3][PUT] -> {statusCode} {responsePut.ReasonPhrase} | producto={codigo}");
+        //            Utilidades.EscribirEnLog($"[SG2SH3][PUT] Body: {bodyPut}");
 
-                    // 5xx => retry infinito (NO ensuciar ErroresProtheus en cada reintento)
-                    if (IsRetryableStatus(responsePut.StatusCode))
-                    {
-                        Console.WriteLine($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
-                        Utilidades.EscribirEnLog($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
-                        await Task.Delay(RetryDelay);
-                        continue;
-                    }
+        //            // 5xx => retry infinito (NO ensuciar ErroresProtheus en cada reintento)
+        //            if (IsRetryableStatus(responsePut.StatusCode))
+        //            {
+        //                Console.WriteLine($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+        //                Utilidades.EscribirEnLog($"[SG2SH3][PUT] Protheus respondió {statusCode}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+        //                await Task.Delay(RetryDelay);
+        //                continue;
+        //            }
 
-                    // ✅ 4xx (o cualquier NO OK no-retry) => registrar en ErroresProtheus
-                    if (!responsePut.IsSuccessStatusCode)
-                    {
-                        LogErrorProtheus("PUT", codigo, responsePut.StatusCode, bodyPut);
+        //            // ✅ 4xx (o cualquier NO OK no-retry) => registrar en ErroresProtheus
+        //            if (!responsePut.IsSuccessStatusCode)
+        //            {
+        //                LogErrorProtheus("PUT", codigo, responsePut.StatusCode, bodyPut);
 
-                        Console.WriteLine($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
-                        Utilidades.EscribirEnLog($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
-                    }
+        //                Console.WriteLine($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
+        //                Utilidades.EscribirEnLog($"[SG2SH3][PUT] ERROR NO-RETRY {statusCode}. producto={codigo}");
+        //            }
 
-                    return; // éxito o error no-retry
-                }
-                catch (Exception ex) when (IsRetryableException(ex))
-                {
-                    Console.WriteLine($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
-                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
-                    await Task.Delay(RetryDelay);
-                }
-                catch (Exception ex)
-                {
-                    // ✅ log ErroresProtheus (una vez) y cortar
-                    LogExcepcionProtheus("PUT", codigo, ex);
+        //            return; // éxito o error no-retry
+        //        }
+        //        catch (Exception ex) when (IsRetryableException(ex))
+        //        {
+        //            Console.WriteLine($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+        //            Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error transitorio: {ex.Message}. Reintentando en 5 minutos. Intento #{intento} | producto={codigo}");
+        //            await Task.Delay(RetryDelay);
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            // ✅ log ErroresProtheus (una vez) y cortar
+        //            LogExcepcionProtheus("PUT", codigo, ex);
 
-                    Console.WriteLine($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
-                    Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
-                    return;
-                }
-            }
-        }
+        //            Console.WriteLine($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+        //            Utilidades.EscribirEnLog($"[SG2SH3][PUT] Error NO transitorio. Abortando. producto={codigo}. Detalle: {ex}");
+        //            return;
+        //        }
+        //    }
+        //}
 
         // =========================
         // HEALTHCHECK (timeout => retry infinito)
@@ -560,14 +560,14 @@ namespace Web_Service
             return ex is TaskCanceledException || ex is HttpRequestException;
         }
 
-        private static bool EsRegistroExistente(HttpStatusCode status, string body)
-        {
-            if (status == HttpStatusCode.Conflict) return true;
-            if (string.IsNullOrWhiteSpace(body)) return false;
+        //private static bool EsRegistroExistente(HttpStatusCode status, string body)
+        //{
+        //    if (status == HttpStatusCode.Conflict) return true;
+        //    if (string.IsNullOrWhiteSpace(body)) return false;
 
-            return body.Contains("ya existe", StringComparison.OrdinalIgnoreCase) ||
-                   body.Contains("Registro duplicado", StringComparison.OrdinalIgnoreCase);
-        }
+        //    return body.Contains("ya existe", StringComparison.OrdinalIgnoreCase) ||
+        //           body.Contains("Registro duplicado", StringComparison.OrdinalIgnoreCase);
+        //}
 
         private static string TryGetProducto(string jsonData)
         {
@@ -625,113 +625,105 @@ namespace Web_Service
         }
 
         //Consulta con Workarea y recurso hijo
-        private const string consultaD_workarea_recurso = @"SELECT
-    p.catalogueId   AS Padre,
-    p.name          AS descripcion,
-    wa.catalogueId  AS centroTrabajo,
-    prod.productId  AS recurso, 
-    op.catalogueId  AS Operacion,
-	ta.allocated_time_centesimal AS allocated_time_centesimal,
-    ROW_NUMBER() OVER (
-        PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
-        ORDER BY prod.productId
-    ) AS nro_recurso
-FROM ProcessRevision        AS pr
-INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
-INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
-
--- WorkArea
-INNER JOIN WorkAreaOccurrence             AS occ1 
-        ON occ1.parentRef = po.id_Table
-       AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
-INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
-INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
-
--- Recursos hijos de la WorkArea (vía WorkAreaOccurrence)
-INNER JOIN WorkAreaOccurrence wao ON wao.instancedRef = war.id_Table
-INNER JOIN Occurrence occ2        ON occ2.parentRef   = wao.id_Table
-INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
-INNER JOIN Product prod             ON prod.id_Table     = prod_rev.masterRef
-
--- Operaciones
-LEFT JOIN ProcessOccurrence po_op 
-        ON po_op.parentRef = po.id_Table
-LEFT JOIN OperationRevision op_rev 
-        ON op_rev.id_Table = po_op.instancedRef
-LEFT JOIN Operation op 
-        ON op.id_Table = op_rev.masterRef
-
-OUTER APPLY (
-    SELECT TOP 1
-        uvud_time.value AS allocated_time_centesimal
-    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
-    JOIN AssociatedAttachment aa
-       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
-    JOIN Form f_time
-       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
-      AND f_time.subType = 'MEOpTimeAnalysis'
-    JOIN UserValue_UserData uvud_time
-       ON uvud_time.id_Father = f_time.id_Table + 1
-      AND uvud_time.title = 'allocated_time'
-) AS ta
-
-
-ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;";
+                    private const string consultaD_workarea_recurso = @"SELECT
+            p.catalogueId AS Padre,
+            p.name AS descripcion,
+            wa.catalogueId AS centroTrabajo,
+            prod.productId AS recurso,
+            op.catalogueId AS Operacion,
+            ta.allocated_time_centesimal AS allocated_time_centesimal,
+            ROW_NUMBER() OVER (
+            PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
+            ORDER BY prod.productId
+            ) AS nro_recurso
+            FROM ProcessRevision AS pr
+            INNER JOIN Process AS p
+            ON p.id_Table = pr.masterRef
+            INNER JOIN ProcessOccurrence AS po
+            ON po.instancedRef = pr.id_Table
+            INNER JOIN WorkAreaOccurrence AS occ1
+            ON occ1.parentRef = po.id_Table
+            AND occ1.subType IN ('MEWorkArea','MEWorkarea')
+            INNER JOIN WorkAreaRevision AS war
+            ON war.id_Table = occ1.instancedRef
+            INNER JOIN WorkArea AS wa
+            ON wa.id_Table = war.masterRef
+            INNER JOIN Occurrence AS occ2
+            ON occ2.parentRef = occ1.id_Table
+            INNER JOIN ProductRevision AS prod_rev
+            ON prod_rev.id_Table = occ2.instancedRef
+            INNER JOIN Product AS prod
+            ON prod.id_Table = prod_rev.masterRef
+            LEFT JOIN ProcessOccurrence AS po_op
+            ON po_op.parentRef = po.id_Table
+            LEFT JOIN OperationRevision AS op_rev
+            ON op_rev.id_Table = po_op.instancedRef
+            LEFT JOIN Operation AS op
+            ON op.id_Table = op_rev.masterRef
+            OUTER APPLY (
+            SELECT TOP 1
+            uvf.value AS allocated_time_centesimal
+            FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+            INNER JOIN AssociatedAttachment aa
+            ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+            AND aa.role = 'METimeAnalysisRelation'
+            INNER JOIN UserValue_Form uvf
+            ON uvf.id_Father = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+            AND uvf.title = 'allocated_time'
+            ) AS ta
+            ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC";
 
         //Consulta para los xml que vienen sin WorkAreaOccurrence
         private const string ConsultaA_ConWorkArea_SinWAO = @"
-SELECT
-    p.catalogueId   AS Padre,
-    p.name          AS descripcion,
-    wa.catalogueId  AS centroTrabajo,
-    prod.productId  AS recurso, 
-    op.catalogueId  AS Operacion,
-	ta.allocated_time_centesimal AS allocated_time_centesimal,
-    ROW_NUMBER() OVER (
-        PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
-        ORDER BY prod.productId
-    ) AS nro_recurso
-FROM ProcessRevision        AS pr
-INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
-INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
+            SELECT
+                p.catalogueId   AS Padre,
+                p.name          AS descripcion,
+                wa.catalogueId  AS centroTrabajo,
+                prod.productId  AS recurso, 
+                op.catalogueId  AS Operacion,
+                ta.allocated_time_centesimal AS allocated_time_centesimal,
+                ROW_NUMBER() OVER (
+                    PARTITION BY p.catalogueId, op.catalogueId, wa.catalogueId
+                    ORDER BY prod.productId
+                ) AS nro_recurso
+            FROM ProcessRevision        AS pr
+            INNER JOIN Process                AS p   ON p.id_Table  = pr.masterRef
+            INNER JOIN ProcessOccurrence      AS po  ON po.instancedRef = pr.id_Table
 
--- WorkArea
-INNER JOIN Occurrence             AS occ1 
-        ON occ1.parentRef = po.id_Table
-       AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
-INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
-INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
+            -- WorkArea
+            INNER JOIN Occurrence             AS occ1 
+                    ON occ1.parentRef = po.id_Table
+                   AND occ1.subType   IN ('MEWorkArea','MEWorkarea')
+            INNER JOIN WorkAreaRevision       AS war ON war.id_Table    = occ1.instancedRef
+            INNER JOIN WorkArea               AS wa  ON wa.id_Table     = war.masterRef
 
--- Recursos hijos de la WorkArea (vía WorkAreaOccurrence)
-INNER JOIN WorkAreaOccurrence wao ON wao.instancedRef = war.id_Table
-INNER JOIN Occurrence occ2        ON occ2.parentRef   = wao.id_Table
-INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
-INNER JOIN Product prod             ON prod.id_Table     = prod_rev.masterRef
+            -- Recursos hijos de la WorkArea (vía WorkAreaOccurrence)
+            INNER JOIN Occurrence occ2        ON occ2.parentRef   = occ1.id_Table
+            INNER JOIN ProductRevision prod_rev ON prod_rev.id_Table = occ2.instancedRef
+            INNER JOIN Product prod             ON prod.id_Table     = prod_rev.masterRef
 
--- Operaciones
-LEFT JOIN ProcessOccurrence po_op 
-        ON po_op.parentRef = po.id_Table
-LEFT JOIN OperationRevision op_rev 
-        ON op_rev.id_Table = po_op.instancedRef
-LEFT JOIN Operation op 
-        ON op.id_Table = op_rev.masterRef
+            -- Operaciones
+            LEFT JOIN ProcessOccurrence po_op 
+                    ON po_op.parentRef = po.id_Table
+            LEFT JOIN OperationRevision op_rev 
+                    ON op_rev.id_Table = po_op.instancedRef
+            LEFT JOIN Operation op 
+                    ON op.id_Table = op_rev.masterRef
 
-OUTER APPLY (
-    SELECT TOP 1
-        uvud_time.value AS allocated_time_centesimal
-    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
-    JOIN AssociatedAttachment aa
-       ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
-    JOIN Form f_time
-       ON f_time.id_Table = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
-      AND f_time.subType = 'MEOpTimeAnalysis'
-    JOIN UserValue_UserData uvud_time
-       ON uvud_time.id_Father = f_time.id_Table + 1
-      AND uvud_time.title = 'allocated_time'
-) AS ta
+            --  NUEVO CALCULO
+            OUTER APPLY (
+                SELECT TOP 1
+                    uvf.value AS allocated_time_centesimal
+                FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+                INNER JOIN AssociatedAttachment aa 
+                    ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+                   AND aa.role = 'METimeAnalysisRelation'
+                INNER JOIN UserValue_Form uvf 
+                    ON uvf.id_Father = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+                   AND uvf.title = 'allocated_time'
+            ) AS ta
 
-
-ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
+            ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 ";
 
         //Consulta para los xml que vienen sin WorkArea
@@ -739,15 +731,16 @@ ORDER BY RIGHT(p.catalogueId, LEN(p.catalogueId) - 3) DESC;
 SELECT
     p.catalogueId   AS Padre,
     p.name          AS descripcion,
-    NULL            AS centroTrabajo,          -- no hay WA
-    prod.productId  AS recurso,                -- recurso real
+    NULL            AS centroTrabajo,
+    prod.productId  AS recurso,
 
-    uud.value AS allocated_time_centesimal,
-    op.catalogueId          AS Operacion,
+    ta.allocated_time_centesimal,
+    op.catalogueId  AS Operacion,
+
     ROW_NUMBER() OVER (
-    PARTITION BY p.catalogueId, op.catalogueId
-    ORDER BY prod.productId
-) AS nro_recurso
+        PARTITION BY p.catalogueId, op.catalogueId
+        ORDER BY prod.productId
+    ) AS nro_recurso
 
 FROM ProcessRevision        AS pr
 JOIN Process                AS p
@@ -767,16 +760,7 @@ JOIN ProductRevision        AS prod_rev
 JOIN Product                AS prod
       ON prod.id_Table = prod_rev.masterRef
 
--- Form maestro de proceso + TimeAnalysis
-LEFT JOIN Form AS f_proc
-       ON f_proc.name = CONCAT(p.catalogueId, '/', pr.revision)
-
-LEFT JOIN Form AS f_time
-       ON f_time.id_Table = f_proc.id_Table + 3
-
-LEFT JOIN UserValue_UserData AS uud
-       ON uud.id_Father = f_time.id_Table + 1
-      AND uud.title = 'allocated_time'
+-- ❌ ELIMINADO: lógica vieja basada en Form + offsets
 
 -- Vista e instancia de proceso (para nro_busqueda)
 INNER JOIN ProcessRevisionView pr_view 
@@ -795,10 +779,21 @@ INNER JOIN OperationRevision op_rev
 INNER JOIN Operation op 
         ON op.id_Table = op_rev.masterRef
 
--- Cálculo de tiempo
+--  NUEVO CALCULO
+OUTER APPLY (
+    SELECT TOP 1
+        uvf.value AS allocated_time_centesimal
+    FROM STRING_SPLIT(po_op.associatedAttachmentRefs, ' ') s
+    INNER JOIN AssociatedAttachment aa
+        ON aa.id_Table = RIGHT(s.value, LEN(s.value) - 3)
+       AND aa.role = 'METimeAnalysisRelation'
+    INNER JOIN UserValue_Form uvf
+        ON uvf.id_Father = RIGHT(aa.attachmentRef, LEN(aa.attachmentRef) - 3)
+       AND uvf.title = 'allocated_time'
+) AS ta
 
 ORDER BY
-	TRY_CONVERT(INT, SUBSTRING(p.catalogueId, 4, LEN(p.catalogueId) - 3)) DESC
+    TRY_CONVERT(INT, SUBSTRING(p.catalogueId, 4, LEN(p.catalogueId) - 3)) DESC
 ";
 
         //Consulta para los xml que vienen con WorkArea que apunta directo a ProductRevision
@@ -896,11 +891,11 @@ WHERE COL_LENGTH('WorkAreaOccurrence','subType') IS NOT NULL;", connection))
 
             if (waoTieneSubType)
             {
-                Utilidades.EscribirEnLog("SG2/HS3 -> WorkAreaOccurrence.subType detectado → Query múltiples WorkAreas");
+                Utilidades.EscribirEnLog("SG2/SH3 -> WorkAreaOccurrence.subType detectado → Query múltiples WorkAreas");
                 return consultaD_workarea_recurso;
             }
 
-            Utilidades.EscribirEnLog("SG2/HS3 -> No hay WorkArea → Query SIN WorkArea");
+            Utilidades.EscribirEnLog("SG2/SH3 -> No hay WorkArea → Query SIN WorkArea");
             return consultaB_sin_workarea;
         }
 
